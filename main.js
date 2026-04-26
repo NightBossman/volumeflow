@@ -84,6 +84,13 @@ function createTray() {
       label: 'Zamknij',
       click: () => {
         isQuitting = true;
+        if (tray) {
+          tray.destroy();
+          tray = null;
+        }
+        if (mainWindow) {
+          mainWindow.destroy();
+        }
         app.quit();
       }
     }
@@ -107,6 +114,13 @@ function createTray() {
 // IPC Handlers
 ipcMain.on('close-app', () => {
   isQuitting = true;
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
+  if (mainWindow) {
+    mainWindow.destroy();
+  }
   app.quit();
 });
 
