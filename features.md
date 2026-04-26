@@ -14,9 +14,9 @@
 *   **Lucide Icons Integration:** Profesjonalne ikony wektorowe.
 *   **Live Updates:** Automatyczne odświeżanie listy aktywnych aplikacji audio (co 2.5s).
 *   **Settings Persistence:** Motyw i tryb Eye Saver są zapamiętywane i przywracane po restarcie.
+*   **System Tray:** Działanie w tle i pełna obsługa ikony w zasobniku systemowym (minimalizacja, menu kontekstowe).
 
 ### 🟡 Funkcje Planowane (Do wdrożenia PRZED V1.0)
-*   **System Tray:** Działanie w tle i ikona w zasobniku obok zegara zamiast na pasku zadań.
 *   **Prawdziwe ikony aplikacji:** Wyciąganie rzeczywistych ikon (plików .exe) z uruchomionych programów.
 *   **Tryb Scen (Profile):** Możliwość zapisania presetów głośności (np. "Praca", "Gaming") i szybkiego przełączania.
 

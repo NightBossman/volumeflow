@@ -38,7 +38,7 @@
 
 ### 6. Szybki Szlif V1.0 (W toku) [/]
 - [x] Settings Persistence (Motyw + Eye Saver)
-- [ ] **System Tray** – ikonka w zasobniku systemowym (praca w tle)
+- [x] **System Tray** – ikonka w zasobniku systemowym (praca w tle)
 - [ ] **Prawdziwe ikony aplikacji** – wyciąganie ikon z plików .exe
 - [ ] **Tryb Scen (Profile)** – zapisywalne presety głośności
 
