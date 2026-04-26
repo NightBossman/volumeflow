@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execFile } from 'child_process';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import { createRequire } from 'module';
 
@@ -15,6 +15,131 @@ const isDev = process.env.NODE_ENV === 'development';
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
+
+// ============================================================
+// Audio Bridge - persistent child process
+// ============================================================
+
+let bridgeProcess = null;
+let bridgeReady = false;
+let pendingRequests = new Map(); // requestId -> { resolve, reject, timeout }
+let requestCounter = 0;
+let responseBuffer = '';
+
+function startBridge() {
+  const bridgePath = path.join(__dirname, 'AudioBridge.exe');
+  
+  if (!fs.existsSync(bridgePath)) {
+    console.error('AudioBridge.exe not found at:', bridgePath);
+    return;
+  }
+
+  bridgeProcess = spawn(bridgePath, [], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+
+  bridgeProcess.stdout.setEncoding('utf8');
+  bridgeProcess.stderr.setEncoding('utf8');
+
+  bridgeProcess.stdout.on('data', (data) => {
+    responseBuffer += data;
+    
+    // Process complete lines
+    let newlineIdx;
+    while ((newlineIdx = responseBuffer.indexOf('\n')) !== -1) {
+      const line = responseBuffer.substring(0, newlineIdx).trim();
+      responseBuffer = responseBuffer.substring(newlineIdx + 1);
+      
+      if (!line) continue;
+
+      try {
+        const parsed = JSON.parse(line);
+        
+        // Handle "ready" signal
+        if (parsed.status === 'ready') {
+          bridgeReady = true;
+          console.log('AudioBridge is ready');
+          continue;
+        }
+
+        // Route response to the oldest pending request
+        const oldestKey = pendingRequests.keys().next().value;
+        if (oldestKey !== undefined) {
+          const req = pendingRequests.get(oldestKey);
+          pendingRequests.delete(oldestKey);
+          clearTimeout(req.timeout);
+          req.resolve(parsed);
+        }
+      } catch (err) {
+        console.error('Bridge parse error:', err.message, 'line:', line);
+      }
+    }
+  });
+
+  bridgeProcess.stderr.on('data', (data) => {
+    console.error('Bridge stderr:', data);
+  });
+
+  bridgeProcess.on('exit', (code) => {
+    console.log('AudioBridge exited with code:', code);
+    bridgeReady = false;
+    bridgeProcess = null;
+    
+    // Auto-restart after 1 second (unless quitting)
+    if (!isQuitting) {
+      setTimeout(() => startBridge(), 1000);
+    }
+  });
+
+  bridgeProcess.on('error', (err) => {
+    console.error('Bridge process error:', err);
+    bridgeReady = false;
+  });
+}
+
+function sendBridgeCommand(command) {
+  return new Promise((resolve, reject) => {
+    if (!bridgeProcess || !bridgeReady) {
+      return resolve(null);
+    }
+
+    const id = ++requestCounter;
+    const timeoutHandle = setTimeout(() => {
+      pendingRequests.delete(id);
+      resolve(null); // Timeout gracefully
+    }, 5000);
+
+    pendingRequests.set(id, { resolve, reject, timeout: timeoutHandle });
+
+    try {
+      bridgeProcess.stdin.write(JSON.stringify(command) + '\n');
+    } catch (err) {
+      pendingRequests.delete(id);
+      clearTimeout(timeoutHandle);
+      resolve(null);
+    }
+  });
+}
+
+function stopBridge() {
+  if (bridgeProcess) {
+    try {
+      bridgeProcess.stdin.write('{"action":"exit"}\n');
+    } catch (e) { }
+    
+    setTimeout(() => {
+      if (bridgeProcess) {
+        try { bridgeProcess.kill(); } catch (e) { }
+        bridgeProcess = null;
+      }
+    }, 500);
+  }
+}
+
+// ============================================================
+// Window & Tray
+// ============================================================
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -89,6 +214,7 @@ function createTray() {
       label: 'Zamknij',
       click: () => {
         isQuitting = true;
+        stopBridge();
         if (tray) {
           tray.destroy();
           tray = null;
@@ -116,9 +242,13 @@ function createTray() {
   });
 }
 
+// ============================================================
 // IPC Handlers
+// ============================================================
+
 ipcMain.on('close-app', () => {
   isQuitting = true;
+  stopBridge();
   if (tray) {
     tray.destroy();
     tray = null;
@@ -150,12 +280,11 @@ ipcMain.on('set-window-size', (event, { width, height }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) {
     win.setSize(width, height, true);
-    win.center(); // Optional: keep it centered
+    win.center();
   }
 });
 
-// Usunięto stare require, importy są na górze pliku
-
+// Settings persistence
 const userDataPath = app.getPath('userData');
 const configPath = path.join(userDataPath, 'config.json');
 
@@ -179,121 +308,60 @@ ipcMain.on('save-settings', (event, settings) => {
   }
 });
 
+// ============================================================
+// Audio IPC - now via AudioBridge
+// ============================================================
+
 ipcMain.handle('get-audio-sessions', async () => {
-  return new Promise((resolve, reject) => {
-    const svvPath = path.join(__dirname, 'svcl.exe');
-    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 10000);
-    const jsonPath = path.join(__dirname, `sessions_${uniqueId}.json`);
-    
-    execFile(svvPath, ['/sjson', jsonPath], { windowsHide: true }, (error) => {
-      if (error) {
-        console.error('Error executing SoundVolumeView:', error);
-        return resolve([]); // W przypadku błędu zwróć pustą listę zamiast wywalać appkę
-      }
-
-      try {
-        let data = fs.readFileSync(jsonPath, 'utf8');
-        data = data.replace(/^\uFEFF/, ''); // Usunięcie BOM
-        const sessions = JSON.parse(data);
-        
-        const processes = sessions
-          .filter(s => s.Type === 'Application' && s.Direction === 'Render') // Tylko aplikacje odtwarzające dźwięk
-          .map(s => {
-            let name = s.Name || "Unknown";
-            // Jeśli nazwa jest pusta, użyj nazwy pliku wykonywalnego
-            if (!name && s['Process Path']) {
-               name = path.basename(s['Process Path'], '.exe');
-            }
-            // Zbudowanie obiektu
-            return {
-              pid: parseInt(s['Process ID']) || 0,
-              name: name,
-              path: s['Process Path'] || '',
-              volume: parseFloat(s['Volume Percent']) / 100,
-              muted: s.Muted === 'Yes',
-              id: s['Command-Line Friendly ID']
-            };
-          })
-          .filter(p => p.pid !== 0); // Odrzucenie błędnych wpisów
-
-        // Usunięcie pliku tymczasowego
-        fs.unlink(jsonPath, () => {});
-        
-        resolve(processes);
-      } catch (err) {
-        console.error('Error reading/parsing sessions.json:', err);
-        resolve([]);
-      }
-    });
-  });
-});
-
-ipcMain.on('toggle-session-mute', (event, { id }) => {
-  if (!id) return;
-  const svvPath = path.join(__dirname, 'svcl.exe');
-  execFile(svvPath, ['/SwitchMute', id], { windowsHide: true }, (error) => {
-    if (error) console.error('Error toggling mute:', error);
-  });
-});
-
-ipcMain.on('set-session-volume', (event, { id, volume }) => {
-  if (!id) return;
-  const svvPath = path.join(__dirname, 'svcl.exe');
-  // Obliczenie procentów: np. 0.5 -> 50
-  const volPercent = Math.min(100, Math.max(0, volume * 100)).toFixed(1);
-  console.log(`Setting volume for ${id} to ${volPercent}`);
+  const result = await sendBridgeCommand({ action: 'get_sessions' });
+  if (!result || !result.sessions) return [];
   
-  execFile(svvPath, ['/SetVolume', id, volPercent], { windowsHide: true }, (error) => {
-    if (error) console.error('Error setting volume:', error);
-  });
+  return result.sessions.map(s => ({
+    pid: s.pid,
+    name: s.name || 'Unknown',
+    path: s.path || '',
+    volume: s.volume,  // Already 0.0 - 1.0 from bridge
+    muted: s.muted,
+    id: String(s.pid)  // Use PID as identifier for bridge commands
+  }));
+});
+
+ipcMain.on('toggle-session-mute', async (event, { id }) => {
+  if (!id) return;
+  const pid = parseInt(id);
+  if (isNaN(pid)) return;
+  await sendBridgeCommand({ action: 'toggle_mute', pid: pid });
+});
+
+ipcMain.on('set-session-volume', async (event, { id, volume }) => {
+  if (!id) return;
+  const pid = parseInt(id);
+  if (isNaN(pid)) return;
+  const vol = Math.min(1.0, Math.max(0.0, volume));
+  await sendBridgeCommand({ action: 'set_volume', pid: pid, volume: vol });
 });
 
 ipcMain.handle('get-master-info', async () => {
-  return new Promise((resolve) => {
-    const svvPath = path.join(__dirname, 'svcl.exe');
-    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 10000);
-    const jsonPath = path.join(__dirname, `master_${uniqueId}.json`);
-    
-    execFile(svvPath, ['/sjson', jsonPath], { windowsHide: true }, (error) => {
-      if (error) return resolve({ volume: 50, id: '' });
-
-      try {
-        let data = fs.readFileSync(jsonPath, 'utf8');
-        data = data.replace(/^\uFEFF/, '');
-        const sessions = JSON.parse(data);
-        
-        // Szukamy domyślnego urządzenia Render
-        const master = sessions.find(s => s.Type === 'Device' && s.Direction === 'Render' && s.Default === 'Yes');
-        
-        if (master) {
-          resolve({
-            volume: parseFloat(master['Volume Percent']) || 50,
-            muted: master.Muted === 'Yes',
-            id: master['Command-Line Friendly ID']
-          });
-        } else {
-          resolve({ volume: 50, muted: false, id: '' });
-        }
-        fs.unlink(jsonPath, () => {});
-      } catch (err) {
-        resolve({ volume: 50, id: '' });
-      }
-    });
-  });
-});
-
-ipcMain.on('set-master-volume', (event, { id, volume }) => {
-  const svvPath = path.join(__dirname, 'svcl.exe');
-  const volPercent = Math.min(100, Math.max(0, volume)).toFixed(1);
+  const result = await sendBridgeCommand({ action: 'get_master' });
+  if (!result || !result.master) return { volume: 50, muted: false, id: '' };
   
-  // Jeśli mamy ID urządzenia, używamy go, w przeciwnym razie domyślne
-  const target = id || "DefaultPlaybackDevice";
-  execFile(svvPath, ['/SetVolume', target, volPercent], { windowsHide: true }, (error) => {
-    if (error) console.error('Error setting master volume:', error);
-  });
+  return {
+    volume: result.master.volume,
+    muted: result.master.muted,
+    id: 'master'
+  };
 });
+
+ipcMain.on('set-master-volume', async (event, { id, volume }) => {
+  await sendBridgeCommand({ action: 'set_master_volume', volume: volume });
+});
+
+// ============================================================
+// App Lifecycle
+// ============================================================
 
 app.whenReady().then(() => {
+  startBridge();
   createWindow();
   createTray();
 
@@ -308,6 +376,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  stopBridge();
 });
 
 app.on('window-all-closed', () => {
