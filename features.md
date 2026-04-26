@@ -5,19 +5,20 @@
 ### 🟢 Funkcje Ukończone (V1.0 Ready - Zrealizowane)
 *   **Real Audio Control:** Precyzyjne sterowanie głośnością pojedynczych procesów oraz systemu (Master).
 *   **Interactive Mute:** Szybkie wyciszanie procesów jednym kliknięciem z wizualną informacją o stanie.
+*   **Master Mute Sync:** Stan wyciszenia urządzenia głównego jest poprawnie synchronizowany z UI.
 *   **Dual-Mode Interface:** Tryb kompaktowy (minimalistyczny) oraz rozszerzony (pełna kontrola).
 *   **Premium Glass UI:** Nowoczesna estetyka oparta na przezroczystościach i rozmyciu (Acrylic/Mica).
 *   **Theme System:** 4 starannie dobrane palety kolorystyczne (Midnight, Solar, Matrix, Frost).
 *   **Eye Saver Mode:** Filtr redukujący zmęczenie oczu przy pracy w nocy.
 *   **About Section:** Karta informacyjna o aplikacji zintegrowana z UI.
 *   **Lucide Icons Integration:** Profesjonalne ikony wektorowe.
-*   **Live Updates:** Automatyczne odświeżanie listy aktywnych aplikacji audio.
+*   **Live Updates:** Automatyczne odświeżanie listy aktywnych aplikacji audio (co 2.5s).
+*   **Settings Persistence:** Motyw i tryb Eye Saver są zapamiętywane i przywracane po restarcie.
 
-### 🟢 Funkcje Planowane (Do wdrożenia PRZED V1.0)
-*   **Prawdziwe ikony aplikacji:** Wyciąganie rzeczywistych ikon (plików .exe) z uruchomionych programów zamiast ikon domyślnych.
-*   **System Tray:** Działanie w tle i ikona w zasobniku obok zegara.
-*   **Settings Persistence:** Zapamiętywanie motywów i trybów po restarcie aplikacji.
-*   **Tryb Scen (Profile):** Możliwość zapisania presetów głośności (np. "Praca", "Gaming") i szybkiego ich przełączania.
+### 🟡 Funkcje Planowane (Do wdrożenia PRZED V1.0)
+*   **System Tray:** Działanie w tle i ikona w zasobniku obok zegara zamiast na pasku zadań.
+*   **Prawdziwe ikony aplikacji:** Wyciąganie rzeczywistych ikon (plików .exe) z uruchomionych programów.
+*   **Tryb Scen (Profile):** Możliwość zapisania presetów głośności (np. "Praca", "Gaming") i szybkiego przełączania.
 
 ### 🟡 Funkcje "Po wydaniu" (Aktualizacje 1.x)
 *   **Grupowanie procesów:** Możliwość łączenia suwaków kilku aplikacji w jedną grupę sterowania.
