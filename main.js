@@ -181,11 +181,11 @@ ipcMain.on('save-settings', (event, settings) => {
 
 ipcMain.handle('get-audio-sessions', async () => {
   return new Promise((resolve, reject) => {
-    const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
+    const svvPath = path.join(__dirname, 'svcl.exe');
     const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 10000);
     const jsonPath = path.join(__dirname, `sessions_${uniqueId}.json`);
     
-    execFile(svvPath, ['/sjson', jsonPath], (error) => {
+    execFile(svvPath, ['/sjson', jsonPath], { windowsHide: true }, (error) => {
       if (error) {
         console.error('Error executing SoundVolumeView:', error);
         return resolve([]); // W przypadku błędu zwróć pustą listę zamiast wywalać appkę
@@ -230,31 +230,31 @@ ipcMain.handle('get-audio-sessions', async () => {
 
 ipcMain.on('toggle-session-mute', (event, { id }) => {
   if (!id) return;
-  const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
-  execFile(svvPath, ['/SwitchMute', id], (error) => {
+  const svvPath = path.join(__dirname, 'svcl.exe');
+  execFile(svvPath, ['/SwitchMute', id], { windowsHide: true }, (error) => {
     if (error) console.error('Error toggling mute:', error);
   });
 });
 
 ipcMain.on('set-session-volume', (event, { id, volume }) => {
   if (!id) return;
-  const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
+  const svvPath = path.join(__dirname, 'svcl.exe');
   // Obliczenie procentów: np. 0.5 -> 50
   const volPercent = Math.min(100, Math.max(0, volume * 100)).toFixed(1);
   console.log(`Setting volume for ${id} to ${volPercent}`);
   
-  execFile(svvPath, ['/SetVolume', id, volPercent], (error) => {
+  execFile(svvPath, ['/SetVolume', id, volPercent], { windowsHide: true }, (error) => {
     if (error) console.error('Error setting volume:', error);
   });
 });
 
 ipcMain.handle('get-master-info', async () => {
   return new Promise((resolve) => {
-    const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
+    const svvPath = path.join(__dirname, 'svcl.exe');
     const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 10000);
     const jsonPath = path.join(__dirname, `master_${uniqueId}.json`);
     
-    execFile(svvPath, ['/sjson', jsonPath], (error) => {
+    execFile(svvPath, ['/sjson', jsonPath], { windowsHide: true }, (error) => {
       if (error) return resolve({ volume: 50, id: '' });
 
       try {
@@ -283,12 +283,12 @@ ipcMain.handle('get-master-info', async () => {
 });
 
 ipcMain.on('set-master-volume', (event, { id, volume }) => {
-  const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
+  const svvPath = path.join(__dirname, 'svcl.exe');
   const volPercent = Math.min(100, Math.max(0, volume)).toFixed(1);
   
   // Jeśli mamy ID urządzenia, używamy go, w przeciwnym razie domyślne
   const target = id || "DefaultPlaybackDevice";
-  execFile(svvPath, ['/SetVolume', target, volPercent], (error) => {
+  execFile(svvPath, ['/SetVolume', target, volPercent], { windowsHide: true }, (error) => {
     if (error) console.error('Error setting master volume:', error);
   });
 });
