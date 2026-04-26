@@ -1,0 +1,24 @@
+{
+  "name": "volumeflow",
+  "version": "1.0.0",
+  "description": "Premium Windows Audio Mixer",
+  "main": "main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"cross-env NODE_ENV=development electron .\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.2",
+    "electron-builder": "^25.1.8",
+    "svelte": "^5.0.0-next.1",
+    "vite": "^5.4.10"
+  },
+  "dependencies": {
+    "lucide-svelte": "^0.454.0"
+  }
+}
