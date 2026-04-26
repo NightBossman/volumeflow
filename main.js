@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -7,8 +7,12 @@ const __dirname = path.dirname(__filename);
 
 const isDev = process.env.NODE_ENV === 'development';
 
+let mainWindow = null;
+let tray = null;
+let isQuitting = false;
+
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 400,
     height: 600,
     frame: false,
@@ -20,16 +24,96 @@ function createWindow() {
     },
   });
 
+  // Zamiast zamykać okno, chowamy je do tray
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   if (isDev) {
-    win.loadURL('http://localhost:5173');
+    mainWindow.loadURL('http://localhost:5173');
   } else {
-    win.loadFile(path.join(__dirname, 'dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
   }
+}
+
+function createTray() {
+  // Programowe tworzenie ikony tray 16x16 (3 paski equalizera)
+  const size = 16;
+  const canvas = Buffer.alloc(size * size * 4); // RGBA
+
+  // Rysowanie 3 pasków (kolumn) equalizera w kolorze białym
+  const bars = [
+    { x: 3, h: 8 },   // lewy pasek
+    { x: 7, h: 12 },  // środkowy (najwyższy)
+    { x: 11, h: 6 },  // prawy pasek
+  ];
+
+  for (const bar of bars) {
+    const startY = size - bar.h;
+    for (let y = startY; y < size; y++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const x = bar.x + dx;
+        const idx = (y * size + x) * 4;
+        canvas[idx] = 255;     // R
+        canvas[idx + 1] = 255; // G
+        canvas[idx + 2] = 255; // B
+        canvas[idx + 3] = 220; // A (lekko przezroczysty)
+      }
+    }
+  }
+
+  const icon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
+  tray = new Tray(icon);
+  tray.setToolTip('VolumeFlow - Audio Mixer');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Pokaż VolumeFlow',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'Zamknij',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setContextMenu(contextMenu);
+
+  // Kliknięcie na ikonkę tray przywraca okno
+  tray.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    }
+  });
 }
 
 // IPC Handlers
 ipcMain.on('close-app', () => {
+  isQuitting = true;
   app.quit();
+});
+
+ipcMain.on('minimize-to-tray', () => {
+  if (mainWindow) {
+    mainWindow.hide();
+  }
 });
 
 ipcMain.on('set-window-size', (event, { width, height }) => {
@@ -179,12 +263,21 @@ ipcMain.on('set-master-volume', (event, { id, volume }) => {
 
 app.whenReady().then(() => {
   createWindow();
+  createTray();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (mainWindow) {
+      mainWindow.show();
+    } else {
+      createWindow();
+    }
   });
 });
 
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // Nie zamykamy, bo aplikacja działa w tray
 });

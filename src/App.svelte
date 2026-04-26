@@ -6,13 +6,15 @@
     X, 
     Maximize2, 
     Minimize2, 
+    Minus,
     Sun, 
     Moon, 
     Users, 
     Settings,
     Activity,
     Info,
-    Heart
+    Heart,
+    Power
   } from 'lucide-svelte';
 
   const { ipcRenderer } = window.require('electron');
@@ -85,6 +87,10 @@
     loadSessions(); // Natychmiastowe odświeżenie
   }
 
+  function hideToTray() {
+    ipcRenderer.send('minimize-to-tray');
+  }
+
   function closeApp() {
     ipcRenderer.send('close-app');
   }
@@ -127,6 +133,9 @@
         {:else}
           <Maximize2 size={18} />
         {/if}
+      </button>
+      <button onclick={hideToTray} class="icon-btn" title="Schowaj do zasobnika">
+        <Minus size={18} />
       </button>
       <button onclick={closeApp} class="icon-btn close" title="Zamknij">
         <X size={20} />
