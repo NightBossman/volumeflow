@@ -36,3 +36,9 @@
 *   **Cloud Sync:** Synchronizacja własnych profili, motywów i ustawień korektora między różnymi komputerami za pośrednictwem chmury.
 *   **Auto-Duck & Per-App EQ:** Automatyczne ściszanie muzyki podczas rozmów na komunikatorach oraz zaawansowany korektor graficzny niezależny dla każdego procesu osobno.
 *   **Voice Control Integration:** Kompatybilność z asystentami głosowymi ("Wycisz Spotify", "Głośność ogólna na 50%").
+
+## 🌐 Architektura Przyszłości (Technologie Ekosystemu)
+Wdrażanie funkcji "Ambitnych" (szczególnie Cloud Sync, konta Pro, Marketplace i aplikacje mobilne) będzie wymagało rozbudowy projektu o usługi chmurowe. Wstępny plan technologiczny zakłada:
+*   **Baza Danych i Backend:** **Firebase** (Firestore do synchronizacji profili w czasie rzeczywistym, Firebase Auth do zarządzania kontami Free/Pro, Cloud Storage dla assetów Marketplace).
+*   **Aplikacje Mobilne:** **Dart / Flutter** (pozwoli to na jednoczesne wydanie aplikacji Remote Control na Androida i iOS z natywnym wsparciem dla Firebase).
+*   **Web Portal:** Landing page, panel logowania oraz zarządzania subskrypcją hostowany na Firebase Hosting.
