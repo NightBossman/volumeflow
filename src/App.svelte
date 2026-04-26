@@ -134,10 +134,22 @@
       console.error('Failed to load settings:', e);
     }
 
-    loadSessions();
-    const interval = setInterval(loadSessions, 2500);
+    let isRunning = true;
+    
+    async function pollSessions() {
+      if (!isRunning) return;
+      await loadSessions();
+      if (isRunning) {
+        setTimeout(pollSessions, 2500);
+      }
+    }
+    
+    pollSessions();
     ipcRenderer.send('set-window-size', { width: 400, height: 350 });
-    return () => clearInterval(interval);
+    
+    return () => {
+      isRunning = false;
+    };
   });
 </script>
 

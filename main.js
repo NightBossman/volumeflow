@@ -182,7 +182,8 @@ ipcMain.on('save-settings', (event, settings) => {
 ipcMain.handle('get-audio-sessions', async () => {
   return new Promise((resolve, reject) => {
     const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
-    const jsonPath = path.join(__dirname, 'sessions.json');
+    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 10000);
+    const jsonPath = path.join(__dirname, `sessions_${uniqueId}.json`);
     
     execFile(svvPath, ['/sjson', jsonPath], (error) => {
       if (error) {
@@ -250,7 +251,8 @@ ipcMain.on('set-session-volume', (event, { id, volume }) => {
 ipcMain.handle('get-master-info', async () => {
   return new Promise((resolve) => {
     const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
-    const jsonPath = path.join(__dirname, 'master.json');
+    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 10000);
+    const jsonPath = path.join(__dirname, `master_${uniqueId}.json`);
     
     execFile(svvPath, ['/sjson', jsonPath], (error) => {
       if (error) return resolve({ volume: 50, id: '' });
