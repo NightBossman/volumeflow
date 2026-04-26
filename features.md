@@ -4,16 +4,20 @@
 
 ### 🟢 Funkcje Ukończone (V1.0 Ready)
 *   **Real Audio Control:** Precyzyjne sterowanie głośnością pojedynczych procesów oraz systemu (Master).
+*   **Interactive Mute:** Szybkie wyciszanie procesów jednym kliknięciem z wizualną informacją o stanie.
 *   **Dual-Mode Interface:** Tryb kompaktowy (minimalistyczny) oraz rozszerzony (pełna kontrola).
 *   **Premium Glass UI:** Nowoczesna estetyka oparta na przezroczystościach i rozmyciu (Acrylic/Mica).
 *   **Theme System:** 4 starannie dobrane palety kolorystyczne (Midnight, Solar, Matrix, Frost).
 *   **Eye Saver Mode:** Filtr redukujący zmęczenie oczu przy pracy w nocy.
+*   **About Section:** Karta informacyjna o aplikacji zintegrowana z UI.
 *   **Lucide Icons Integration:** Profesjonalne ikony wektorowe zwiększające czytelność.
 *   **Live Updates:** Automatyczne odświeżanie listy aktywnych aplikacji audio.
 
 ### 🟡 Funkcje Planowane (Post 1.0)
 *   **Smart Overdrive (Boost):** Cyfrowe wzmocnienie dźwięku powyżej 100% (do 150-200%).
 *   **Multi-Select & Grouping:** Możliwość łączenia suwaków kilku aplikacji (np. Spotify + Gra) w jedną grupę.
+*   **Settings Persistence:** Zapamiętywanie wybranego motywu i trybu po restarcie.
+*   **System Tray:** Ikonka w zasobniku systemowym dla pracy w tle.
 *   **Hotkeys:** Skróty klawiszowe do błyskawicznego wyciszania lub podbijania wybranych grup.
 *   **Audio Peak Visualizer:** Małe paski poziomu dźwięku obok każdego suwaka (live feedback).
 
