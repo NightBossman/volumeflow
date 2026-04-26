@@ -1,0 +1,11 @@
+:root { --bg-color: rgba(10, 10, 15, 0.85); --glass-bg: rgba(255, 255, 255, 0.03); --glass-border: rgba(255, 255, 255, 0.1); --primary-color: #0078d4; --accent-color: #00c2ff; --danger-color: #ff4d00; --text-color: #ffffff; }
+[data-theme="solar"] { --bg-color: rgba(20, 10, 10, 0.85); --primary-color: #ff4d00; --accent-color: #ffcc00; --danger-color: #ff0055; }
+[data-theme="matrix"] { --bg-color: rgba(5, 15, 5, 0.9); --primary-color: #00ff41; --accent-color: #00ffae; --danger-color: #ff3300; }
+[data-theme="frost"] { --bg-color: rgba(10, 20, 25, 0.85); --primary-color: #00f2ff; --accent-color: #00ffcc; --danger-color: #ff6600; }
+body { margin: 0; padding: 0; font-family: 'Segoe UI', 'Outfit', sans-serif; background: transparent; color: var(--text-color); user-select: none; overflow: hidden; transition: all 0.5s ease; }
+#app { height: 100vh; display: flex; flex-direction: column; background: var(--bg-color); backdrop-filter: blur(25px); border: 1px solid var(--glass-border); border-radius: 12px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8); }
+.draggable { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+.eye-saver { filter: sepia(0.75) brightness(0.7) contrast(0.9) !important; }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb { background: var(--primary-color); opacity: 0.3; border-radius: 2px; }
