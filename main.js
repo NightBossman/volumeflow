@@ -60,6 +60,7 @@ ipcMain.handle('get-audio-sessions', async () => {
             pid: parseInt(s['Process ID']) || 0,
             name: s.Name || path.basename(s['Process Path'] || 'Unknown', '.exe'),
             volume: parseFloat(s['Volume Percent']) / 100,
+            muted: s.Muted === 'Yes',
             id: s['Command-Line Friendly ID']
           }))
           .filter(p => p.pid !== 0);
@@ -71,6 +72,12 @@ ipcMain.handle('get-audio-sessions', async () => {
       }
     });
   });
+});
+
+ipcMain.on('toggle-session-mute', (event, { id }) => {
+  if (!id) return;
+  const svvPath = path.join(__dirname, 'SoundVolumeView.exe');
+  execFile(svvPath, ['/SwitchMute', id]);
 });
 
 ipcMain.on('set-session-volume', (event, { id, volume }) => {
