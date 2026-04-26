@@ -192,7 +192,7 @@ ipcMain.handle('get-audio-sessions', async () => {
       }
 
       try {
-        let data = fs.readFileSync(jsonPath, 'utf16le');
+        let data = fs.readFileSync(jsonPath, 'utf8');
         data = data.replace(/^\uFEFF/, ''); // Usunięcie BOM
         const sessions = JSON.parse(data);
         
@@ -258,7 +258,7 @@ ipcMain.handle('get-master-info', async () => {
       if (error) return resolve({ volume: 50, id: '' });
 
       try {
-        let data = fs.readFileSync(jsonPath, 'utf16le');
+        let data = fs.readFileSync(jsonPath, 'utf8');
         data = data.replace(/^\uFEFF/, '');
         const sessions = JSON.parse(data);
         
