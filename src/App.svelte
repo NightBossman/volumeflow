@@ -11,6 +11,7 @@
   let currentTheme = 'midnight';
   let eyeSaver = false;
   let masterVolume = 75;
+  let masterMuted = false;
   let masterId = '';
   let processes = [];
 
@@ -30,6 +31,7 @@
       const master = await ipcRenderer.invoke('get-master-info');
       if (master) {
         masterVolume = Math.round(master.volume);
+        masterMuted = master.muted;
         masterId = master.id;
       }
     } catch (e) { console.error(e); }
@@ -86,7 +88,7 @@
   </header>
 
   <section class="master-section">
-    <VolumeSlider label="Głośność Główna" bind:value={masterVolume} isMaster={true} onchange={() => handleMasterChange(masterVolume)} onmute={() => handleMute(masterId)} />
+    <VolumeSlider label="Głośność Główna" bind:value={masterVolume} isMaster={true} muted={masterMuted} onchange={() => handleMasterChange(masterVolume)} onmute={() => handleMute(masterId)} />
   </section>
 
   <div class="separator"></div>

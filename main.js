@@ -93,7 +93,7 @@ ipcMain.handle('get-master-info', async () => {
     const jsonPath = path.join(__dirname, 'master.json');
     
     execFile(svvPath, ['/sjson', jsonPath], (error) => {
-      if (error) return resolve({ volume: 50, id: '' });
+      if (error) return resolve({ volume: 50, muted: false, id: '' });
       try {
         let data = fs.readFileSync(jsonPath, 'utf16le');
         data = data.replace(/^\uFEFF/, '');
@@ -102,14 +102,15 @@ ipcMain.handle('get-master-info', async () => {
         if (master) {
           resolve({
             volume: parseFloat(master['Volume Percent']) || 50,
+            muted: master.Muted === 'Yes',
             id: master['Command-Line Friendly ID']
           });
         } else {
-          resolve({ volume: 50, id: '' });
+          resolve({ volume: 50, muted: false, id: '' });
         }
         fs.unlink(jsonPath, () => {});
       } catch (err) {
-        resolve({ volume: 50, id: '' });
+        resolve({ volume: 50, muted: false, id: '' });
       }
     });
   });
