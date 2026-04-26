@@ -1,6 +1,11 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFile } from 'child_process';
+import fs from 'fs';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -130,6 +135,17 @@ ipcMain.on('minimize-to-tray', () => {
   }
 });
 
+ipcMain.handle('get-app-icon', async (event, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const icon = await app.getFileIcon(filePath, { size: 'normal' });
+    return icon.toDataURL();
+  } catch (err) {
+    console.error('Error fetching icon:', err);
+    return null;
+  }
+});
+
 ipcMain.on('set-window-size', (event, { width, height }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) {
@@ -138,8 +154,7 @@ ipcMain.on('set-window-size', (event, { width, height }) => {
   }
 });
 
-const { execFile } = require('child_process');
-const fs = require('fs');
+// Usunięto stare require, importy są na górze pliku
 
 const userDataPath = app.getPath('userData');
 const configPath = path.join(userDataPath, 'config.json');
@@ -192,6 +207,7 @@ ipcMain.handle('get-audio-sessions', async () => {
             return {
               pid: parseInt(s['Process ID']) || 0,
               name: name,
+              path: s['Process Path'] || '',
               volume: parseFloat(s['Volume Percent']) / 100,
               muted: s.Muted === 'Yes',
               id: s['Command-Line Friendly ID']
