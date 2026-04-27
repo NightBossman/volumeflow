@@ -210,6 +210,7 @@ namespace VolumeFlow
 
             // Start peak polling thread
             var peakThread = new System.Threading.Thread(PeakPollingLoop);
+            peakThread.SetApartmentState(System.Threading.ApartmentState.STA);
             peakThread.IsBackground = true;
             peakThread.Start();
 
@@ -521,7 +522,20 @@ namespace VolumeFlow
                         sessionEnum.GetCount(out count);
 
                         var sb = new StringBuilder();
-                        sb.Append("{\"type\":\"peaks\",\"peaks\":{");
+                        sb.Append("{\"type\":\"peaks\",");
+                        
+                        // Get Master Peak
+                        float masterPeak = 0;
+                        try {
+                            object objMeter;
+                            Guid iidMeter = new Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064");
+                            device.Activate(ref iidMeter, 1, IntPtr.Zero, out objMeter);
+                            var deviceMeter = (IAudioMeterInformation)objMeter;
+                            deviceMeter.GetPeakValue(out masterPeak);
+                        } catch {}
+                        
+                        sb.Append("\"master\":" + masterPeak.ToString("F4", CultureInfo.InvariantCulture) + ",");
+                        sb.Append("\"peaks\":{");
                         bool first = true;
 
                         for (int i = 0; i < count; i++)
@@ -555,11 +569,9 @@ namespace VolumeFlow
                         }
 
                         sb.Append("}}");
-                        if (!first) // Only send if there are any active peaks
-                        {
-                            Console.WriteLine(sb.ToString());
-                            Console.Out.Flush();
-                        }
+                        // We always send now to include masterPeak even if sessions are silent
+                        Console.WriteLine(sb.ToString());
+                        Console.Out.Flush();
                     }
                 }
                 catch { }

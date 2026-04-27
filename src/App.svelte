@@ -30,6 +30,7 @@
   let masterId = '';
   let processes = [];
   let peaks = {}; // PID -> value (0.0 to 1.0)
+  let masterPeak = 0;
   let profiles = []; // { id, name, sessions: [{ name, volume }], masterVolume }
   let iconCache = new Map();
 
@@ -158,7 +159,8 @@
     loadMaster();
 
     ipcRenderer.on('audio-peaks', (event, data) => {
-      peaks = data;
+      peaks = data.peaks || {};
+      masterPeak = data.master || 0;
     });
 
     const interval = setInterval(() => {
@@ -200,6 +202,7 @@
         bind:value={masterVolume} 
         isMaster={true} 
         muted={masterMuted}
+        peak={masterPeak}
         onchange={() => handleMasterChange(masterVolume)}
         onmute={() => handleMute(masterId)}
       />
