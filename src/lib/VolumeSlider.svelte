@@ -5,6 +5,7 @@
     label = "Aplikacja", 
     isMaster = false, 
     muted = false,
+    peak = 0,
     onchange,
     onmute,
     icon
@@ -42,6 +43,7 @@
   </div>
   
   <div class="input-wrapper">
+    <div class="peak-glow" style="width: {peak * 100}%" class:is-muted={muted}></div>
     <input 
       type="range" 
       min="0" 
@@ -53,6 +55,7 @@
       class:overdrive={isOverdrive}
     />
     <div class="track-fill" style="width: {(value / 150) * 100}%" class:overdrive={isOverdrive} class:is-muted={muted}></div>
+    <div class="peak-bar" style="width: {peak * 100}%" class:is-muted={muted}></div>
   </div>
 </div>
 
@@ -104,10 +107,6 @@
   .label {
     color: rgba(255, 255, 255, 0.8);
     font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 180px;
   }
 
   .value {
@@ -177,5 +176,37 @@
 
   .track-fill.overdrive {
     background: linear-gradient(90deg, var(--primary-color), #ff4d00);
+  }
+
+  .peak-bar {
+    position: absolute;
+    bottom: -6px;
+    left: 0;
+    height: 2px;
+    background: var(--primary-color);
+    box-shadow: 0 0 8px var(--primary-color);
+    border-radius: 2px;
+    pointer-events: none;
+    transition: width 0.05s ease-out;
+    opacity: 0.8;
+    z-index: 3;
+  }
+
+  .peak-glow {
+    position: absolute;
+    top: -50%;
+    left: 0;
+    height: 200%;
+    background: var(--primary-color);
+    opacity: 0.15;
+    filter: blur(12px);
+    border-radius: 50%;
+    pointer-events: none;
+    transition: width 0.05s ease-out;
+    z-index: 0;
+  }
+
+  .peak-bar.is-muted, .peak-glow.is-muted {
+    display: none;
   }
 </style>
