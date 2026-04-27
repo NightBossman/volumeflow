@@ -128,6 +128,17 @@ namespace VolumeFlow
         int SetDuckingPreference(bool optOut);
     }
 
+    [Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioMeterInformation
+    {
+        [PreserveSig]
+        int GetPeakValue(out float pfPeak);
+        [PreserveSig]
+        int GetChannelsPeakValues(int u32ChannelCount, [Out] float[] afPeakValues);
+        [PreserveSig]
+        int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+    }
+
     [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface ISimpleAudioVolume
     {
@@ -196,6 +207,11 @@ namespace VolumeFlow
 
             Console.WriteLine("{\"status\":\"ready\"}");
             Console.Out.Flush();
+
+            // Start peak polling thread
+            var peakThread = new System.Threading.Thread(PeakPollingLoop);
+            peakThread.IsBackground = true;
+            peakThread.Start();
 
             string line;
             while ((line = Console.ReadLine()) != null)
@@ -481,6 +497,74 @@ namespace VolumeFlow
                 Console.WriteLine("{\"ok\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}");
             }
             Console.Out.Flush();
+        }
+
+        static void PeakPollingLoop()
+        {
+            while (true)
+            {
+                try
+                {
+                    var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                    IMMDevice device;
+                    if (enumerator.GetDefaultAudioEndpoint(0, 1, out device) == 0)
+                    {
+                        object objMgr;
+                        Guid iidMgr = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
+                        device.Activate(ref iidMgr, 1, IntPtr.Zero, out objMgr);
+                        var mgr = (IAudioSessionManager2)objMgr;
+
+                        IAudioSessionEnumerator sessionEnum;
+                        mgr.GetSessionEnumerator(out sessionEnum);
+
+                        int count;
+                        sessionEnum.GetCount(out count);
+
+                        var sb = new StringBuilder();
+                        sb.Append("{\"type\":\"peaks\",\"peaks\":{");
+                        bool first = true;
+
+                        for (int i = 0; i < count; i++)
+                        {
+                            try
+                            {
+                                IAudioSessionControl sessionCtl;
+                                sessionEnum.GetSession(i, out sessionCtl);
+                                var session2 = sessionCtl as IAudioSessionControl2;
+                                if (session2 == null) continue;
+
+                                uint pid;
+                                session2.GetProcessId(out pid);
+                                if (pid == 0) continue;
+
+                                var meter = sessionCtl as IAudioMeterInformation;
+                                if (meter != null)
+                                {
+                                    float peak;
+                                    meter.GetPeakValue(out peak);
+
+                                    if (peak > 0.0001f) // Only send if actually playing something
+                                    {
+                                        if (!first) sb.Append(",");
+                                        sb.Append("\"" + pid + "\":" + peak.ToString("F4", CultureInfo.InvariantCulture));
+                                        first = false;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        sb.Append("}}");
+                        if (!first) // Only send if there are any active peaks
+                        {
+                            Console.WriteLine(sb.ToString());
+                            Console.Out.Flush();
+                        }
+                    }
+                }
+                catch { }
+                System.Threading.Thread.Sleep(50); // ~20 FPS
+            }
         }
 
         // ============================================================

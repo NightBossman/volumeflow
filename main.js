@@ -68,6 +68,14 @@ function startBridge() {
           continue;
         }
 
+        // Handle peak updates
+        if (parsed.type === 'peaks') {
+          if (mainWindow) {
+            mainWindow.webContents.send('audio-peaks', parsed.peaks);
+          }
+          continue;
+        }
+
         // Route response to the oldest pending request
         const oldestKey = pendingRequests.keys().next().value;
         if (oldestKey !== undefined) {
@@ -77,7 +85,7 @@ function startBridge() {
           req.resolve(parsed);
         }
       } catch (err) {
-        console.error('Bridge parse error:', err.message, 'line:', line);
+        // Ignored if it's partial or invalid JSON
       }
     }
   });
