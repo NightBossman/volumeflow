@@ -27,7 +27,7 @@
 - [x] System 5 motywów premium (Midnight, Solar, Matrix, Frost, Cyberpunk)
 - [x] Tryb **Eye Saver** (Filtr światła niebieskiego)
 - [x] Płynne animacje przejść między motywami
-- [x] **Settings Persistence** – zapamiętywanie motywu i Eye Saver v `config.json`
+- [x] **Settings Persistence** – zapamiętywanie motywu i Eye Saver w `config.json`
 
 ### 5. Dystrybucja i GitHub [x]
 - [x] Przygotowanie repozytorium na GitHubie
@@ -37,17 +37,20 @@
 
 ### 6. Szybki Szlif V1.0 [x]
 - [x] Settings Persistence (Motyw + Eye Saver)
-- [x] **System Tray** – ikonka v zasobniku systemowym (praca v tle)
+- [x] **System Tray** – ikonka w zasobniku systemowym (praca w tle)
 - [x] **Prawdziwe ikony aplikacji** – wyciąganie ikon z plików .exe
 - [x] **Audio Bridge (Pro)** – natywny mostek C# eliminujący miganie kursora
 - [x] **Tryb Scen (Profile)** – zapisywalne presety głośności
 - [x] **Autostart** – opcja uruchamiania aplikacji z systemem Windows
 - [x] **Volume Fading** – płynne przejścia głośności przy zmianie profilu
-- [x] **Wydanie V1.0.0** – przygotowanie paczki Portable (.exe)
 
-### 7. Przyszłe funkcje (Post V1.0) [ ]
+### 7. Aktualizacje V1.1 (W toku) [/]
+- [ ] **Audio Peak Visualizer** – wizualizacja natężenia dźwięku na suwakach
+- [ ] **Globalne Hotkeye** – skróty klawiszowe do przełączania scen
+- [ ] **OSD (On-Screen Display)** – powiadomienia graficzne na ekranie
+- [ ] **Wyszukiwarka Procesów** – filtrowanie listy aplikacji
+
+### 8. Przyszłe funkcje (Post V1.2) [ ]
 - [ ] Grupowanie procesów (Multi-select)
-- [ ] Globalne Skróty Klawiszowe (Hotkeys)
-- [ ] Audio Peak Visualizer
 - [ ] Smart Overdrive (Boost powyżej 100%)
-- [ ] Wyszukiwarka Procesów
+- [ ] Focus Mode (ściszanie tła dla aktywnego okna)
