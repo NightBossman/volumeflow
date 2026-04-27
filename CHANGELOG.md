@@ -5,6 +5,8 @@
 - **AudioBridge.exe**: Wprowadzenie natywnego mostka audio v C# (Core Audio API).
 - **Persistent Connection**: Electron utrzymuje stałe połączenie z mostkiem przez stdin/stdout.
 - **JSON Protocol**: Nowy, szybki protokół komunikacji między procesami.
+- **New Theme**: Dodano 5. motyw kolorystyczny: **Cyberpunk 2077**.
+- **UI Polish**: Zmniejszono przeźroczystość tła i ulepszono izolację Eye Saver (nagłówek bez filtra).
 
 ### Fixed
 - **Cursor Flickering**: Wyeliminowano problem migającego kursora systemowego przy odświeżaniu danych.

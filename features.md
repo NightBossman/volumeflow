@@ -8,7 +8,7 @@
 *   **Master Mute Sync:** Stan wyciszenia urządzenia głównego jest poprawnie synchronizowany z UI.
 *   **Dual-Mode Interface:** Tryb kompaktowy (minimalistyczny) oraz rozszerzony (pełna kontrola).
 *   **Premium Glass UI:** Nowoczesna estetyka oparta na przezroczystościach i rozmyciu (Acrylic/Mica).
-*   **Theme System:** 4 starannie dobrane palety kolorystyczne (Midnight, Solar, Matrix, Frost).
+*   **Theme System:** 5 starannie dobranych palet kolorystycznych (Midnight, Solar, Matrix, Frost, Cyberpunk).
 *   **Eye Saver Mode:** Filtr redukujący zmęczenie oczu przy pracy v nocy.
 *   **About Section:** Karta informacyjna o aplikacji zintegrowana z UI.
 *   **Lucide Icons Integration:** Profesjonalne ikony wektorowe.
@@ -29,7 +29,7 @@
 *   **Wyszukiwarka Procesów:** Zintegrowane pole wyszukiwania dla długich list aplikacji.
 
 ### 🔴 Funkcje "Ambitne" (Ecosystem & Future)
-*   **Modele Biznesowe (Free vs Pro):** Wprowadzenie darmowej wersji z podstawowymi funkcjami oraz "VolumeFlow Pro" odblokowującej wsparcie wtyczek VST, nielimitowane profile i zaawansowane filtry audio.
+*   **Modele Biznesowe (Free vs Pro):** Wprowadzenie darmowej wersji z podstawowymi funkcjami oraz "VolumeFlow Pro" odblokowującej wsparcie vtyczek VST, nielimitowane profile i zaawansowane filtry audio.
 *   **AI Smart Mixing:** Sztuczna inteligencja analizująca nawyki użytkownika (np. pora dnia, uruchomiona gra) i automatycznie optymalizująca poziomy dźwięku v tle.
 *   **Rozszerzenia Przeglądarki (Browser Add-ons):** Oficjalna wtyczka do Chrome/Edge/Firefox pozwalająca na niezależne sterowanie głośnością pojedynczych kart wideo/audio, a nie całej przeglądarki.
 *   **Ekosystem Mobile (Android/iOS):** Samodzielna aplikacja na smartfony pełniąca funkcję mobilnego miksera dla telefonu oraz bezprzewodowego pilota (Remote Control) przez Wi-Fi dla aplikacji na PC.
