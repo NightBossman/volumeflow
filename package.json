@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently \"vite\" \"cross-env NODE_ENV=development electron .\"",
     "build": "vite build && electron-builder",
-    "pack": "electron-packager . VolumeFlow --platform=win32 --arch=x64 --out=release-packager --overwrite",
+    "pack": "electron-packager . VolumeFlow --platform=win32 --arch=x64 --out=release-slim --overwrite --ignore=\"node_modules|src|build-cache|release|release-packager|.git|vite.config.js|svelte.config.js|AudioBridge.cs|AudioController.cs|AudioController.exe|TestAC.exe|audio_bridge.*|master.*|sessions.*|test.*|test2.json|test3.json|tray-icon.*|readme.txt\"",
     "preview": "vite preview"
   },
   "build": {
