@@ -27,7 +27,12 @@ let requestCounter = 0;
 let responseBuffer = '';
 
 function startBridge() {
-  const bridgePath = path.join(__dirname, 'AudioBridge.exe');
+  let bridgePath = path.join(__dirname, 'AudioBridge.exe');
+  
+  // W wersji spakowanej (ASAR) plik będzie w app.asar.unpacked
+  if (!isDev) {
+    bridgePath = bridgePath.replace('app.asar', 'app.asar.unpacked');
+  }
   
   if (!fs.existsSync(bridgePath)) {
     console.error('AudioBridge.exe not found at:', bridgePath);
@@ -302,11 +307,63 @@ ipcMain.handle('load-settings', () => {
 
 ipcMain.on('save-settings', (event, settings) => {
   try {
+    // Handle Auto-start
+    if (settings.autoStart !== undefined) {
+      app.setLoginItemSettings({
+        openAtLogin: settings.autoStart,
+        path: app.getPath('exe')
+      });
+    }
     fs.writeFileSync(configPath, JSON.stringify(settings, null, 2), 'utf8');
   } catch (err) {
     console.error('Error saving settings:', err);
   }
 });
+
+async function fadeToVolume(pid, targetVolume, duration = 800) {
+  const steps = 12;
+  const interval = duration / steps;
+  
+  // Get current state to know start volume
+  const result = await sendBridgeCommand({ action: 'get_sessions' });
+  if (!result || !result.sessions) return;
+  const session = result.sessions.find(s => s.pid === pid);
+  if (!session) return;
+
+  const startVol = session.volume;
+  const diff = targetVolume - startVol;
+
+  for (let i = 1; i <= steps; i++) {
+    setTimeout(async () => {
+      const current = startVol + (diff * (i / steps));
+      await sendBridgeCommand({ action: 'set_volume', pid: pid, volume: current });
+    }, i * interval);
+  }
+}
+
+ipcMain.handle('apply-profile', async (event, profile) => {
+  if (!profile || !profile.sessions) return false;
+  
+  // Get current live sessions to match by name/path
+  const result = await sendBridgeCommand({ action: 'get_sessions' });
+  if (!result || !result.sessions) return false;
+
+  for (const target of profile.sessions) {
+    const live = result.sessions.find(s => s.name === target.name);
+    if (live) {
+      // Use fading for premium feel
+      fadeToVolume(live.pid, target.volume);
+    }
+  }
+
+  // Also apply master if present
+  if (profile.masterVolume !== undefined) {
+    await sendBridgeCommand({ action: 'set_master_volume', volume: profile.masterVolume });
+  }
+
+  return true;
+});
+
 
 // ============================================================
 // Audio IPC - now via AudioBridge
