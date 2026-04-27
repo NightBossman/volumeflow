@@ -5,20 +5,50 @@
   "main": "main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"cross-env NODE_ENV=development electron .\"",
-    "build": "vite build",
+    "build": "vite build && electron-builder",
+    "pack": "electron-packager . VolumeFlow --platform=win32 --arch=x64 --out=release-packager --overwrite",
     "preview": "vite preview"
   },
+  "build": {
+    "appId": "com.volumeflow.app",
+    "productName": "VolumeFlow",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "AudioBridge.exe",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "AudioBridge.exe"
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "VolumeFlow"
+    }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "type": "module",
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^4.0.0",
-    "concurrently": "^9.0.1",
-    "cross-env": "^7.0.3",
-    "electron": "^33.0.2",
-    "electron-builder": "^25.1.8",
-    "svelte": "^5.0.0-next.1",
-    "vite": "^5.4.10"
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
+    "electron-packager": "^17.1.2",
+    "svelte": "^5.55.5",
+    "vite": "^8.0.10"
   },
   "dependencies": {
-    "lucide-svelte": "^0.454.0"
+    "lucide-svelte": "^1.0.1"
   }
 }
