@@ -5,11 +5,11 @@
 ### 1. Przygotowanie Środowiska [x]
 - [x] Inicjalizacja projektu (Vite + Svelte + Electron)
 - [x] Konfiguracja struktury katalogów
-- [x] Wybór technologii audio (Mostek SoundVolumeView CLI)
+- [x] Wybór technologii audio (Mostek C# Native COM)
 
 ### 2. Backend Audio [x]
 - [x] Implementacja struktury IPC (UI <-> Main)
-- [x] Integracja SoundVolumeView.exe do odczytu sesji
+- [x] Integracja AudioBridge.exe do odczytu sesji (JSON Stream)
 - [x] Obsługa zmiany głośności (0-100%) dla procesów
 - [x] Obsługa Master Volume (Głośność systemowa)
 - [x] Implementacja Mute Toggle (SwitchMute)
@@ -27,19 +27,19 @@
 - [x] System 4 motywów premium (Midnight, Solar, Matrix, Frost)
 - [x] Tryb **Eye Saver** (Filtr światła niebieskiego)
 - [x] Płynne animacje przejść między motywami
-- [x] **Settings Persistence** – zapamiętywanie motywu i Eye Saver w `config.json`
+- [x] **Settings Persistence** – zapamiętywanie motywu i Eye Saver v `config.json`
 
-### 5. Dystrybucja i GitHub [/]
+### 5. Dystrybucja i GitHub [x]
 - [x] Przygotowanie repozytorium na GitHubie
 - [x] Publikacja kodu źródłowego i dokumentacji
 - [x] Pierwszy merge PR (Wyciszanie + About + Poprawka Codex)
-- [/] Konfiguracja **Electron Builder** do tworzenia `.exe`
-- [ ] Instrukcja instalacji dla użytkownika
+- [x] Push dokumentacji technicznej i README.md
 
 ### 6. Szybki Szlif V1.0 (W toku) [/]
 - [x] Settings Persistence (Motyw + Eye Saver)
-- [x] **System Tray** – ikonka w zasobniku systemowym (praca w tle)
-- [ ] **Prawdziwe ikony aplikacji** – wyciąganie ikon z plików .exe
+- [x] **System Tray** – ikonka v zasobniku systemowym (praca v tle)
+- [x] **Prawdziwe ikony aplikacji** – wyciąganie ikon z plików .exe
+- [x] **Audio Bridge (Pro)** – natywny mostek C# eliminujący miganie kursora
 - [ ] **Tryb Scen (Profile)** – zapisywalne presety głośności
 
 ### 7. Przyszłe funkcje (Post V1.0) [ ]
