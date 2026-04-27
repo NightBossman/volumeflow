@@ -17,13 +17,11 @@
 *   **System Tray:** Działanie v tle i pełna obsługa ikony v zasobniku systemowym (minimalizacja, menu kontekstowe).
 *   **Native App Icons:** Automatyczne pobieranie rzeczywistych ikon z plików .exe procesów.
 *   **Persistent Audio Bridge (Pro):** Natywny mostek v C# (COM) eliminujący miganie kursora i zaśmiecanie Menedżera Zadań.
-
-### 🟡 Funkcje Planowane (Do wdrożenia PRZED V1.0)
 *   **Tryb Scen (Profile):** Możliwość zapisania presetów głośności (np. "Praca", "Gaming") i szybkiego przełączania.
 *   **Auto-Start:** Integracja z systemem Windows (Uruchom przy starcie).
 *   **Smooth Fade:** Inteligentne, płynne przejścia głośności przy zmianie profilu.
 
-### 🟡 Funkcje "Po wydaniu" (Aktualizacje 1.x)
+### 🟡 Funkcje Planowane (Aktualizacje 1.x)
 *   **Grupowanie procesów:** Możliwość łączenia suwaków kilku aplikacji v jedną grupę sterowania.
 *   **Globalne Skróty Klawiszowe (Hotkeys):** Wyciszanie i zmiana głośności profili lub wybranych aplikacji z klawiatury bez otwierania okna.
 *   **Audio Peak Visualizer:** Pulsujące paski głośności obok każdego suwaka reagujące na aktualny dźwięk.

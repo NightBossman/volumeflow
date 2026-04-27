@@ -1,6 +1,6 @@
 # Plan Pracy - VolumeFlow
 
-## Status Projektu: Alpha → Pre-Release (Backend + UI gotowe, trwają szlify V1.0)
+## Status Projektu: V1.0 Stable (Wersja produkcyjna gotowa)
 
 ### 1. Przygotowanie Środowiska [x]
 - [x] Inicjalizacja projektu (Vite + Svelte + Electron)
@@ -35,14 +35,15 @@
 - [x] Pierwszy merge PR (Wyciszanie + About + Poprawka Codex)
 - [x] Push dokumentacji technicznej i README.md
 
-### 6. Szybki Szlif V1.0 (W toku) [/]
+### 6. Szybki Szlif V1.0 [x]
 - [x] Settings Persistence (Motyw + Eye Saver)
 - [x] **System Tray** – ikonka v zasobniku systemowym (praca v tle)
 - [x] **Prawdziwe ikony aplikacji** – wyciąganie ikon z plików .exe
 - [x] **Audio Bridge (Pro)** – natywny mostek C# eliminujący miganie kursora
-- [/] **Tryb Scen (Profile)** – zapisywalne presety głośności
-- [ ] **Autostart** – opcja uruchamiania aplikacji z systemem Windows
-- [ ] **Volume Fading** – płynne przejścia głośności przy zmianie profilu
+- [x] **Tryb Scen (Profile)** – zapisywalne presety głośności
+- [x] **Autostart** – opcja uruchamiania aplikacji z systemem Windows
+- [x] **Volume Fading** – płynne przejścia głośności przy zmianie profilu
+- [x] **Wydanie V1.0.0** – przygotowanie paczki Portable (.exe)
 
 ### 7. Przyszłe funkcje (Post V1.0) [ ]
 - [ ] Grupowanie procesów (Multi-select)
