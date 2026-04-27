@@ -20,6 +20,8 @@
 
 ### 🟡 Funkcje Planowane (Do wdrożenia PRZED V1.0)
 *   **Tryb Scen (Profile):** Możliwość zapisania presetów głośności (np. "Praca", "Gaming") i szybkiego przełączania.
+*   **Auto-Start:** Integracja z systemem Windows (Uruchom przy starcie).
+*   **Smooth Fade:** Inteligentne, płynne przejścia głośności przy zmianie profilu.
 
 ### 🟡 Funkcje "Po wydaniu" (Aktualizacje 1.x)
 *   **Grupowanie procesów:** Możliwość łączenia suwaków kilku aplikacji v jedną grupę sterowania.
@@ -41,5 +43,5 @@
 ## 🌐 Architektura Przyszłości (Technologie Ekosystemu)
 Wdrażanie funkcji "Ambitnych" (szczególnie Cloud Sync, konta Pro, Marketplace i aplikacje mobilne) będzie wymagało rozbudowy projektu o usługi chmurowe. Wstępny plan technologiczny zakłada:
 *   **Baza Danych i Backend:** **Firebase** (Firestore do synchronizacji profili v czasie rzeczywistym, Firebase Auth do zarządzania kontami Free/Pro, Cloud Storage dla assetów Marketplace).
-*   **Aplikacje Mobilne:** **Dart / Flutter** (pozwoli to na jednoczesne wydanie aplikacji Remote Control na Androida i iOS z natywnym wsparciem dla Firebase).
+*   **Aplikacje Mobilne:** **Dart / Flutter** (pozwoli to na jednoczesne wydanie aplikacji Remote Control na Androida i iOS z natywnym wsparwem dla Firebase).
 *   **Web Portal:** Landing page, panel logowania oraz zarządzania subskrypcją hostowany na Firebase Hosting.

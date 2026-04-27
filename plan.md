@@ -24,7 +24,7 @@
 - [x] Efekty wizualne (Acrylic/Mica, Glassmorphism)
 
 ### 4. Personalizacja [x]
-- [x] System 4 motywów premium (Midnight, Solar, Matrix, Frost)
+- [x] System 5 motywów premium (Midnight, Solar, Matrix, Frost, Cyberpunk)
 - [x] Tryb **Eye Saver** (Filtr światła niebieskiego)
 - [x] Płynne animacje przejść między motywami
 - [x] **Settings Persistence** – zapamiętywanie motywu i Eye Saver v `config.json`
@@ -40,7 +40,9 @@
 - [x] **System Tray** – ikonka v zasobniku systemowym (praca v tle)
 - [x] **Prawdziwe ikony aplikacji** – wyciąganie ikon z plików .exe
 - [x] **Audio Bridge (Pro)** – natywny mostek C# eliminujący miganie kursora
-- [ ] **Tryb Scen (Profile)** – zapisywalne presety głośności
+- [/] **Tryb Scen (Profile)** – zapisywalne presety głośności
+- [ ] **Autostart** – opcja uruchamiania aplikacji z systemem Windows
+- [ ] **Volume Fading** – płynne przejścia głośności przy zmianie profilu
 
 ### 7. Przyszłe funkcje (Post V1.0) [ ]
 - [ ] Grupowanie procesów (Multi-select)
