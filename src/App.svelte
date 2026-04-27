@@ -20,19 +20,19 @@
 
   const { ipcRenderer } = window.require('electron');
 
-  let isExpanded = false;
-  let showAbout = false;
-  let currentTheme = 'midnight';
-  let eyeSaver = false;
-  let autoStart = false;
-  let masterVolume = 75;
-  let masterMuted = false;
-  let masterId = '';
-  let processes = [];
-  let peaks = {}; // PID -> value (0.0 to 1.0)
-  let masterPeak = 0;
-  let profiles = []; // { id, name, sessions: [{ name, volume }], masterVolume }
-  let iconCache = new Map();
+  let isExpanded = $state(false);
+  let showAbout = $state(false);
+  let currentTheme = $state('midnight');
+  let eyeSaver = $state(false);
+  let autoStart = $state(false);
+  let masterVolume = $state(75);
+  let masterMuted = $state(false);
+  let masterId = $state('');
+  let processes = $state([]);
+  let peaks = $state({}); // PID -> value (0.0 to 1.0)
+  let masterPeak = $state(0);
+  let profiles = $state([]); // { id, name, sessions: [{ name, volume }], masterVolume }
+  let iconCache = $state(new Map());
 
   const themes = [
     { id: 'midnight', name: 'Midnight', color: '#0078d4' },
