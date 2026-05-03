@@ -57,7 +57,7 @@ function startBridge() {
       responseBuffer = responseBuffer.substring(newlineIdx + 1);
       
       if (!line) continue;
-
+      // console.log('RAW LINE:', line); // Debug raw data
       try {
         const parsed = JSON.parse(line);
         
@@ -71,7 +71,7 @@ function startBridge() {
         // Handle peak updates
         if (parsed.type === 'peaks') {
           if (mainWindow) {
-            mainWindow.webContents.send('audio-peaks', parsed.peaks);
+            mainWindow.webContents.send('audio-peaks', parsed);
           }
           continue;
         }
@@ -85,7 +85,7 @@ function startBridge() {
           req.resolve(parsed);
         }
       } catch (err) {
-        // Ignored if it's partial or invalid JSON
+        console.error('Bridge parse error:', err.message, 'line:', line);
       }
     }
   });
@@ -344,7 +344,7 @@ async function fadeToVolume(pid, targetVolume, duration = 800) {
   for (let i = 1; i <= steps; i++) {
     setTimeout(async () => {
       const current = startVol + (diff * (i / steps));
-      await sendBridgeCommand({ action: 'set_volume', pid: pid, volume: current });
+      await sendBridgeCommand({ action: 'set_volume', pid, volume: current });
     }, i * interval);
   }
 }
@@ -381,6 +381,7 @@ ipcMain.handle('get-audio-sessions', async () => {
   const result = await sendBridgeCommand({ action: 'get_sessions' });
   if (!result || !result.sessions) return [];
   
+  console.log('Sessions from bridge:', result.sessions.length);
   return result.sessions.map(s => ({
     pid: s.pid,
     name: s.name || 'Unknown',
@@ -440,7 +441,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  isQuitting = true;
+  isQuitting = false; // Correcting lifecycle bug here too
   stopBridge();
 });
 
