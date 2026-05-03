@@ -340,7 +340,10 @@ namespace VolumeFlow
                                         string processName = "Unknown";
                                         try { 
                                             var p = Process.GetProcessById(pid);
-                                            processName = p.ProcessName; 
+                                            processName = p.ProcessName;
+                                            if (!string.IsNullOrEmpty(processName)) {
+                                                processName = char.ToUpper(processName[0]) + processName.Substring(1);
+                                            }
                                         } catch {}
 
                                         activeSessions.Add(new SessionInfo { ProcessId = pid, PeakValue = peak });
