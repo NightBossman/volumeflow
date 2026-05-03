@@ -16,6 +16,9 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 
+// Tracker for active fades to prevent overlaps
+const activeFades = new Map(); // pid -> { cancel: () => void }
+
 // ============================================================
 // Audio Bridge - persistent child process
 // ============================================================
@@ -42,6 +45,10 @@ function startBridge() {
   bridgeProcess = spawn(bridgePath, [], {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+  });
+
+  bridgeProcess.stdin.on('error', (err) => {
+    console.error('Bridge stdin error:', err.message);
   });
 
   bridgeProcess.stdout.setEncoding('utf8');
@@ -76,16 +83,18 @@ function startBridge() {
           continue;
         }
 
-        // Route response to the oldest pending request
-        const oldestKey = pendingRequests.keys().next().value;
-        if (oldestKey !== undefined) {
-          const req = pendingRequests.get(oldestKey);
-          pendingRequests.delete(oldestKey);
+        // Route response by requestId
+        if (parsed.requestId && pendingRequests.has(parsed.requestId)) {
+          const req = pendingRequests.get(parsed.requestId);
+          pendingRequests.delete(parsed.requestId);
           clearTimeout(req.timeout);
           req.resolve(parsed);
         }
       } catch (err) {
         console.error('Bridge parse error:', err.message, 'line:', line);
+        // If we can't parse a line that was a response, it will eventually timeout.
+        // We could also try to resolve the oldest pending if we had no requestId,
+        // but with requestId, it's safer to just let it timeout or handle explicitly.
       }
     }
   });
@@ -113,22 +122,22 @@ function startBridge() {
 
 function sendBridgeCommand(command) {
   return new Promise((resolve, reject) => {
-    if (!bridgeProcess || !bridgeReady) {
+    if (!bridgeProcess || !bridgeReady || !bridgeProcess.stdin.writable) {
       return resolve(null);
     }
 
-    const id = ++requestCounter;
+    const requestId = String(++requestCounter);
     const timeoutHandle = setTimeout(() => {
-      pendingRequests.delete(id);
-      resolve(null); // Timeout gracefully
+      pendingRequests.delete(requestId);
+      resolve(null); 
     }, 5000);
 
-    pendingRequests.set(id, { resolve, reject, timeout: timeoutHandle });
+    pendingRequests.set(requestId, { resolve, reject, timeout: timeoutHandle });
 
     try {
-      bridgeProcess.stdin.write(JSON.stringify(command) + '\n');
+      bridgeProcess.stdin.write(JSON.stringify({ ...command, requestId }) + '\n');
     } catch (err) {
-      pendingRequests.delete(id);
+      pendingRequests.delete(requestId);
       clearTimeout(timeoutHandle);
       resolve(null);
     }
@@ -136,17 +145,21 @@ function sendBridgeCommand(command) {
 }
 
 function stopBridge() {
+  isQuitting = true;
   if (bridgeProcess) {
     try {
-      bridgeProcess.stdin.write('{"action":"exit"}\n');
+      if (bridgeProcess.stdin.writable) {
+        bridgeProcess.stdin.write('{"action":"exit"}\n');
+      }
     } catch (e) { }
     
+    // Fallback kill if bridge doesn't exit gracefully
     setTimeout(() => {
       if (bridgeProcess) {
         try { bridgeProcess.kill(); } catch (e) { }
         bridgeProcess = null;
       }
-    }, 500);
+    }, 800);
   }
 }
 
@@ -161,8 +174,9 @@ function createWindow() {
     frame: false,
     transparent: true,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false, // Required for some native APIs like getFileIcon if we want full integration, but safe here
       preload: path.join(__dirname, 'preload.js'),
     },
   });
@@ -281,8 +295,12 @@ ipcMain.on('minimize-to-tray', () => {
 ipcMain.handle('get-app-icon', async (event, filePath) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return null;
-    const icon = await app.getFileIcon(filePath, { size: 'normal' });
-    return icon.toDataURL();
+    
+    // Wrap with timeout to prevent hanging on slow/network drives
+    return await Promise.race([
+      app.getFileIcon(filePath, { size: 'normal' }).then(icon => icon.toDataURL()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Icon timeout')), 3000))
+    ]);
   } catch (err) {
     console.error('Error fetching icon:', err);
     return null;
@@ -291,8 +309,10 @@ ipcMain.handle('get-app-icon', async (event, filePath) => {
 
 ipcMain.on('set-window-size', (event, { width, height }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (win) {
-    win.setSize(width, height, true);
+  if (win && Number.isFinite(width) && Number.isFinite(height)) {
+    const safeWidth = Math.max(200, Math.min(1920, width));
+    const safeHeight = Math.max(200, Math.min(1080, height));
+    win.setSize(safeWidth, safeHeight, true);
     win.center();
   }
 });
@@ -313,7 +333,7 @@ ipcMain.handle('load-settings', () => {
   return null;
 });
 
-ipcMain.on('save-settings', (event, settings) => {
+ipcMain.on('save-settings', async (event, settings) => {
   try {
     // Handle Auto-start
     if (settings.autoStart !== undefined) {
@@ -322,49 +342,71 @@ ipcMain.on('save-settings', (event, settings) => {
         path: app.getPath('exe')
       });
     }
-    fs.writeFileSync(configPath, JSON.stringify(settings, null, 2), 'utf8');
+    // Use async writeFile to prevent blocking main thread
+    await fs.promises.writeFile(configPath, JSON.stringify(settings, null, 2), 'utf8');
   } catch (err) {
     console.error('Error saving settings:', err);
   }
 });
 
+
+
 async function fadeToVolume(pid, targetVolume, duration = 800) {
+  if (isQuitting) return;
+
+  // Cancel any existing fade for this PID
+  if (activeFades.has(pid)) {
+    activeFades.get(pid).cancel();
+  }
+
   const steps = 12;
   const interval = duration / steps;
   
-  // Get current state to know start volume
   const result = await sendBridgeCommand({ action: 'get_sessions' });
-  if (!result || !result.sessions) return;
+  if (!result || !result.sessions || isQuitting) return;
   const session = result.sessions.find(s => s.pid === pid);
   if (!session) return;
 
   const startVol = session.volume;
   const diff = targetVolume - startVol;
 
+  let isCancelled = false;
+  const cancel = () => { isCancelled = true; };
+  activeFades.set(pid, { cancel });
+
   for (let i = 1; i <= steps; i++) {
-    setTimeout(async () => {
-      const current = startVol + (diff * (i / steps));
-      await sendBridgeCommand({ action: 'set_volume', pid, volume: current });
-    }, i * interval);
+    if (isCancelled || isQuitting) break;
+    
+    await new Promise(r => setTimeout(r, interval));
+    
+    if (isCancelled || isQuitting) break;
+    const current = startVol + (diff * (i / steps));
+    await sendBridgeCommand({ action: 'set_volume', pid, volume: current });
+  }
+
+  if (!isCancelled) {
+    activeFades.delete(pid);
   }
 }
 
 ipcMain.handle('apply-profile', async (event, profile) => {
-  if (!profile || !profile.sessions) return false;
+  if (!profile || !profile.sessions || isQuitting) return false;
   
-  // Get current live sessions to match by name/path
   const result = await sendBridgeCommand({ action: 'get_sessions' });
   if (!result || !result.sessions) return false;
 
-  for (const target of profile.sessions) {
+  // Start all fades in parallel but wait for them
+  const fadePromises = profile.sessions.map(target => {
     const live = result.sessions.find(s => s.name.toLowerCase() === target.name.toLowerCase());
     if (live) {
-      // Use fading for premium feel
-      fadeToVolume(live.pid, target.volume);
+      return fadeToVolume(live.pid, target.volume);
     }
-  }
+    return Promise.resolve();
+  });
 
-  // Also apply master if present
+  Promise.all(fadePromises).catch(e => console.error('Fade error:', e));
+
+  // Apply master
   if (profile.masterVolume !== undefined) {
     const vol = Math.min(1.0, Math.max(0.0, profile.masterVolume / 100));
     await sendBridgeCommand({ action: 'set_master_volume', volume: vol });
@@ -382,7 +424,6 @@ ipcMain.handle('get-audio-sessions', async () => {
   const result = await sendBridgeCommand({ action: 'get_sessions' });
   if (!result || !result.sessions) return [];
   
-  console.log('Sessions from bridge:', result.sessions.length);
   return result.sessions.map(s => ({
     pid: s.pid,
     name: s.name || 'Unknown',
@@ -410,17 +451,17 @@ ipcMain.on('set-session-volume', async (event, { id, volume }) => {
 
 ipcMain.handle('get-master-info', async () => {
   const result = await sendBridgeCommand({ action: 'get_master' });
-  if (!result || !result.master) return { volume: 50, muted: false, id: '' };
+  if (!result || !result.master) return { volume: 0.5, muted: false, id: '' };
   
   return {
-    volume: result.master.volume * 100, // Reverting to percent for UI
+    volume: result.master.volume, // Raw 0-1 for consistent internal API
     muted: result.master.muted,
     id: 'master'
   };
 });
 
 ipcMain.on('set-master-volume', async (event, { id, volume }) => {
-  const vol = Math.min(1.0, Math.max(0.0, volume / 100));
+  const vol = Math.min(1.0, Math.max(0.0, volume)); // Now expects 0-1
   await sendBridgeCommand({ action: 'set_master_volume', volume: vol });
 });
 

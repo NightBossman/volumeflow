@@ -1,6 +1,6 @@
 {
   "name": "volumeflow",
-  "version": "1.1.0",
+  "version": "1.5.0",
   "description": "Premium Windows Audio Mixer",
   "main": "main.js",
   "scripts": {
