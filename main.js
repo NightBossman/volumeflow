@@ -357,7 +357,7 @@ ipcMain.handle('apply-profile', async (event, profile) => {
   if (!result || !result.sessions) return false;
 
   for (const target of profile.sessions) {
-    const live = result.sessions.find(s => s.name === target.name);
+    const live = result.sessions.find(s => s.name.toLowerCase() === target.name.toLowerCase());
     if (live) {
       // Use fading for premium feel
       fadeToVolume(live.pid, target.volume);
