@@ -44,7 +44,7 @@
   async function loadSessions() {
     try {
       const liveProcesses = await ipcRenderer.invoke('get-audio-sessions');
-      if (liveProcesses && liveProcesses.length > 0) {
+      if (liveProcesses) {
         processes = liveProcesses.map(p => ({ ...p, volume: Math.round(p.volume * 100) }));
       }
 

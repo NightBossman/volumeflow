@@ -366,7 +366,8 @@ ipcMain.handle('apply-profile', async (event, profile) => {
 
   // Also apply master if present
   if (profile.masterVolume !== undefined) {
-    await sendBridgeCommand({ action: 'set_master_volume', volume: profile.masterVolume });
+    const vol = Math.min(1.0, Math.max(0.0, profile.masterVolume / 100));
+    await sendBridgeCommand({ action: 'set_master_volume', volume: vol });
   }
 
   return true;
@@ -412,14 +413,15 @@ ipcMain.handle('get-master-info', async () => {
   if (!result || !result.master) return { volume: 50, muted: false, id: '' };
   
   return {
-    volume: result.master.volume,
+    volume: result.master.volume * 100, // Reverting to percent for UI
     muted: result.master.muted,
     id: 'master'
   };
 });
 
 ipcMain.on('set-master-volume', async (event, { id, volume }) => {
-  await sendBridgeCommand({ action: 'set_master_volume', volume: volume });
+  const vol = Math.min(1.0, Math.max(0.0, volume / 100));
+  await sendBridgeCommand({ action: 'set_master_volume', volume: vol });
 });
 
 // ============================================================
@@ -441,7 +443,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  isQuitting = false; // Correcting lifecycle bug here too
+  isQuitting = true;
   stopBridge();
 });
 
