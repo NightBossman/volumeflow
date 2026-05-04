@@ -6,12 +6,14 @@
     X, 
     Maximize2, 
     Minimize2, 
-    Minus, 
-    Settings, 
-    Info, 
+    Minus,
+    Sun, 
     Moon, 
-    Sun,
+    Users, 
+    Settings,
     Activity,
+    Info,
+    Heart,
     Power
   } from 'lucide-svelte';
 
@@ -19,38 +21,44 @@
 
   let isExpanded = $state(false);
   let showAbout = $state(false);
-  let showSettings = $state(false);
-  let masterVolume = $state(50);
-  let masterMuted = $state(false);
-  let masterId = $state('');
-  let processes = $state([]);
-  let peaks = $state({});
-  let masterPeak = $state(0);
   let currentTheme = $state('midnight');
   let eyeSaver = $state(false);
   let autoStart = $state(false);
-  let profiles = $state([]);
-  let iconCache = new Map();
+  let masterVolume = $state(75);
+  let masterMuted = $state(false);
+  let masterId = $state('');
+  let processes = $state([]);
+  let peaks = $state({}); // PID -> value (0.0 to 1.0)
+  let masterPeak = $state(0);
+  let profiles = $state([]); // { id, name, sessions: [{ name, volume }], masterVolume }
+  let iconCache = $state(new Map());
 
   const themes = [
-    { id: 'midnight', name: 'Midnight Deep', color: '#1a1a2e' },
-    { id: 'solar', name: 'Solar Flare', color: '#2b1b17' },
-    { id: 'matrix', name: 'Matrix Digital', color: '#000d00' },
-    { id: 'frost', name: 'Arctic Frost', color: '#001a1a' },
-    { id: 'cyberpunk', name: 'Night City', color: '#0d0d0d' }
+    { id: 'midnight', name: 'Midnight', color: '#0078d4' },
+    { id: 'solar', name: 'Solar', color: '#ff4d00' },
+    { id: 'matrix', name: 'Matrix', color: '#00ff41' },
+    { id: 'frost', name: 'Frost', color: '#00f2ff' },
+    { id: 'cyberpunk', name: 'Cyberpunk', color: '#fcee0a' }
   ];
 
   async function loadSessions() {
     try {
-      const result = await ipcRenderer.invoke('get-audio-sessions');
-      processes = result;
-      
-      // Load icons
-      for (const p of processes) {
-        if (p.path && !iconCache.has(p.path)) {
-          iconCache.set(p.path, 'loading');
-          ipcRenderer.invoke('get-app-icon', p.path).then(icon => {
-            if (icon) iconCache.set(p.path, icon);
+      const liveProcesses = await ipcRenderer.invoke('get-audio-sessions');
+      if (liveProcesses) {
+        // Normalize volume from 0.0-1.0 (bridge) to 0-100 (UI percent)
+        processes = liveProcesses.map(p => ({ ...p, volume: Math.round(p.volume * 100) }));
+      }
+
+      for (const process of processes) {
+        if (process.path && !iconCache.has(process.path)) {
+          iconCache.set(process.path, 'loading'); 
+          ipcRenderer.invoke('get-app-icon', process.path).then(iconData => {
+            if (iconData) {
+              iconCache.set(process.path, iconData);
+              processes = [...processes];
+            } else {
+              iconCache.set(process.path, null);
+            }
           });
         }
       }
@@ -66,7 +74,55 @@
     }
   }
 
+  function saveSettings() {
+    ipcRenderer.send('save-settings', $state.snapshot({
+      theme: currentTheme,
+      eyeSaver: eyeSaver,
+      autoStart: autoStart,
+      profiles: profiles
+    }));
+  }
+
+  function addProfile() {
+    const name = prompt('Nazwa sceny:', `Scena ${profiles.length + 1}`);
+    if (!name) return;
+
+    const newProfile = {
+      id: Date.now(),
+      name: name,
+      masterVolume: masterVolume,
+      sessions: processes.map(p => ({ name: p.name, volume: p.volume / 100 }))
+    };
+
+    profiles = [...profiles, newProfile];
+    saveSettings();
+  }
+
+  async function applyProfile(profile) {
+    await ipcRenderer.invoke('apply-profile', $state.snapshot(profile));
+  }
+
+  function deleteProfile(id) {
+    profiles = profiles.filter(p => p.id !== id);
+    saveSettings();
+  }
+
+  function setTheme(themeId) {
+    currentTheme = themeId;
+    document.body.setAttribute('data-theme', themeId);
+    saveSettings();
+  }
+
+  function toggleMode() {
+    isExpanded = !isExpanded;
+    showAbout = false;
+    const width = 400;
+    const height = isExpanded ? 700 : 350;
+    ipcRenderer.send('set-window-size', { width, height });
+  }
+
   function handleVolumeChange(id, volume) {
+    // volume is in 0-100 range from slider, send as 0.0-1.0 to bridge
     ipcRenderer.send('set-session-volume', { id, volume: volume / 100 });
   }
 
@@ -76,14 +132,7 @@
 
   function handleMute(id) {
     ipcRenderer.send('toggle-session-mute', { id });
-    setTimeout(loadSessions, 100);
-  }
-
-  function toggleMode() {
-    isExpanded = !isExpanded;
-    const width = 400;
-    const height = isExpanded ? 600 : 350;
-    ipcRenderer.send('set-window-size', { width, height });
+    loadSessions();
   }
 
   function hideToTray() {
@@ -145,48 +194,6 @@
       isRunning = false;
     };
   });
-
-  function setTheme(id) {
-    currentTheme = id;
-    document.body.setAttribute('data-theme', id);
-    saveSettings();
-  }
-
-  function saveSettings() {
-    ipcRenderer.send('save-settings', {
-      theme: currentTheme,
-      eyeSaver,
-      autoStart,
-      profiles
-    });
-  }
-
-  function applyProfile(profile) {
-    ipcRenderer.invoke('apply-profile', profile);
-  }
-
-  function deleteProfile(id) {
-    profiles = profiles.filter(p => p.id !== id);
-    saveSettings();
-  }
-
-  function addProfile() {
-    const name = prompt("Nazwa profilu:");
-    if (!name) return;
-    
-    const newProfile = {
-      id: Date.now().toString(),
-      name,
-      masterVolume,
-      sessions: processes.map(p => ({
-        name: p.name,
-        volume: p.volume
-      }))
-    };
-    
-    profiles = [...profiles, newProfile];
-    saveSettings();
-  }
 </script>
 
 <main>
@@ -278,10 +285,6 @@
                   <Moon size={14} /> <span>Eye Saver: ON</span>
                 {:else}
                   <Sun size={14} /> <span>Eye Saver: OFF</span>
-                {#if eyeSaver}
-                  <Moon size={14} /> <span>Eye Saver: ON</span>
-                {:else}
-                  <Sun size={14} /> <span>Eye Saver: OFF</span>
                 {/if}
               </button>
             </div>
@@ -299,146 +302,80 @@
                   </button>
                 </div>
               {/each}
-              <button class="add-profile-btn" onclick={addProfile}>
-                + Nowy Profil
-              </button>
             </div>
-          </div>
-          {/if}
-
-          <div class="footer-nav">
-            <button class="nav-btn" class:active={showAbout} onclick={() => { showAbout = !showAbout; showSettings = false; }}>
-              <Info size={16} /> O programie
-            </button>
-            <button class="nav-btn" class:active={showSettings} onclick={() => { showSettings = !showSettings; showAbout = false; }}>
-              <Settings size={16} /> Ustawienia
+            <button class="add-profile-btn" onclick={addProfile}>
+              <span>+ Zapisz obecną scenę</span>
             </button>
           </div>
 
-          {#if showAbout}
+          <div class="section-title" style="margin-top: 24px">Ustawienia Systemowe</div>
+          <div class="advanced-options">
+            <button class="advanced-btn" class:active={autoStart} onclick={() => { autoStart = !autoStart; saveSettings(); }}>
+              <Power size={16} /> <span>{autoStart ? 'Autostart: ON' : 'Autostart: OFF'}</span>
+            </button>
+            <button class="advanced-btn" onclick={() => showAbout = true}>
+              <Info size={16} /> <span>O programie</span>
+            </button>
+          </div>
+          {:else}
             <div class="about-card">
-              <div class="about-logo">
-                <Activity size={32} color="var(--primary-color)" />
+              <div class="about-header">
+                <Activity size={24} color="var(--primary-color)" />
+                <h3>VolumeFlow v1.5.0</h3>
               </div>
-              <h3>VolumeFlow V1.5.0</h3>
-              <p>Premium Audio Mixer for Windows</p>
-              <div class="about-details">
-                <span>Created by NightBosman</span>
-                <span>Powered by Svelte \u0026 Electron</span>
-              </div>
-            </div>
-          {/if}
-
-          {#if showSettings}
-            <div class="settings-card">
-              <div class="setting-item">
-                <div class="setting-info">
-                  <div class="setting-label">Uruchamiaj przy starcie</div>
-                  <div class="setting-desc">Włącz VolumeFlow przy logowaniu do Windows</div>
+              <p>Premium Windows Audio Mixer stworzony z myślą o estetyce i wydajności.</p>
+              <div class="stats">
+                <div class="stat-item">
+                  <span class="stat-label">Technologia:</span>
+                  <span class="stat-val">Svelte 5 + Electron</span>
                 </div>
-                <button 
-                  class="toggle-btn" 
-                  class:active={autoStart}
-                  onclick={() => { autoStart = !autoStart; saveSettings(); }}
-                >
-                  {autoStart ? 'ON' : 'OFF'}
-                </button>
+                <div class="stat-item">
+                  <span class="stat-label">Status:</span>
+                  <span class="stat-val">Stabilny (v1.5.0)</span>
+                </div>
+              </div>
+              <div class="about-footer">
+                <button class="back-btn" onclick={() => showAbout = false}>Wróć</button>
+                <div class="made-with">
+                  Made with <Heart size={10} color="#ff4444" fill="#ff4444" /> for Users
+                </div>
               </div>
             </div>
           {/if}
         </div>
       {/if}
     </section>
+
+    <footer>
+      Vibe: {themes.find(t => t.id === currentTheme).name} | 
+      {eyeSaver ? 'Protection' : 'Standard'}
+    </footer>
   </div>
 </main>
 
 <style>
-  :global(body) {
-    margin: 0;
-    font-family: 'Inter', sans-serif;
-    color: white;
-    user-select: none;
-    overflow: hidden;
-    background: transparent;
-  }
-
-  :global([data-theme="midnight"]) {
-    --primary-color: #4ecca3;
-    --bg-color: rgba(26, 26, 46, 0.95);
-    --glass-border: rgba(78, 204, 163, 0.2);
-    --accent-glow: rgba(78, 204, 163, 0.1);
-  }
-
-  :global([data-theme="solar"]) {
-    --primary-color: #ff9f43;
-    --bg-color: rgba(43, 27, 23, 0.95);
-    --glass-border: rgba(255, 159, 67, 0.2);
-    --accent-glow: rgba(255, 159, 67, 0.1);
-  }
-
-  :global([data-theme="matrix"]) {
-    --primary-color: #00ff41;
-    --bg-color: rgba(0, 13, 0, 0.95);
-    --glass-border: rgba(0, 255, 65, 0.2);
-    --accent-glow: rgba(0, 255, 65, 0.1);
-  }
-
-  :global([data-theme="frost"]) {
-    --primary-color: #00d2ff;
-    --bg-color: rgba(0, 26, 26, 0.95);
-    --glass-border: rgba(0, 210, 255, 0.2);
-    --accent-glow: rgba(0, 210, 255, 0.1);
-  }
-
-  :global([data-theme="cyberpunk"]) {
-    --primary-color: #f7f700;
-    --bg-color: rgba(13, 13, 13, 0.98);
-    --glass-border: rgba(247, 247, 0, 0.3);
-    --accent-glow: rgba(247, 247, 0, 0.15);
-  }
-
   main {
-    width: 100vw;
-    height: 100vh;
-    background: var(--bg-color);
-    border: 1px solid var(--glass-border);
-    border-radius: 12px;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    backdrop-filter: blur(10px);
+    height: 100%;
+    box-sizing: border-box;
   }
 
   .view-container {
-    padding: 16px;
-    flex: 1;
-    overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    transition: filter 0.3s;
-  }
-
-  .view-container.eye-saver {
-    filter: sepia(0.5) brightness(0.9);
+    flex: 1;
+    overflow: hidden;
+    transition: filter 0.5s ease;
   }
 
   header {
-    height: 48px;
-    padding: 0 16px;
+    height: 44px;
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid var(--glass-border);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .draggable {
-    -webkit-app-region: drag;
-  }
-
-  .no-drag {
-    -webkit-app-region: no-drag;
+    align-items: center;
+    padding: 0 16px;
+    background: rgba(255, 255, 255, 0.05);
   }
 
   .title-group {
@@ -448,206 +385,86 @@
   }
 
   .title {
-    font-size: 0.85em;
     font-weight: 700;
+    font-size: 0.8em;
     letter-spacing: 1px;
+    opacity: 0.9;
     text-transform: uppercase;
-    background: linear-gradient(90deg, white, var(--primary-color));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
   }
 
   .controls {
     display: flex;
-    gap: 4px;
+    gap: 12px;
+    align-items: center;
   }
 
   .icon-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 6px;
-    border: none;
     background: transparent;
-    color: rgba(255, 255, 255, 0.6);
+    border: none;
+    color: white;
+    padding: 4px;
     cursor: pointer;
+    opacity: 0.6;
+    transition: all 0.2s;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
   }
 
   .icon-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
+    opacity: 1;
+    transform: scale(1.1);
   }
 
   .icon-btn.close:hover {
-    background: #ff4757;
+    color: #ff4444;
+  }
+
+  .master-section {
+    padding: 20px 16px;
   }
 
   .separator {
     height: 1px;
-    background: linear-gradient(90deg, transparent, var(--glass-border), transparent);
+    background: var(--glass-border);
+    margin: 0 16px;
   }
 
   .section-title {
     font-size: 0.65em;
-    font-weight: 800;
     text-transform: uppercase;
-    color: var(--primary-color);
     letter-spacing: 1.5px;
-    margin-bottom: 12px;
-    opacity: 0.8;
+    color: rgba(255, 255, 255, 0.4);
+    margin-bottom: 14px;
+    padding-left: 4px;
+    font-weight: 700;
   }
 
   .process-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .icon-container {
-    width: 32px;
-    height: 32px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--primary-color);
-    overflow: hidden;
-  }
-
-  .app-icon {
-    width: 20px;
-    height: 20px;
-    object-fit: contain;
-  }
-
-  .footer-nav {
-    display: flex;
-    gap: 8px;
-    margin-top: 24px;
-    padding-top: 16px;
-    border-top: 1px solid var(--glass-border);
-  }
-
-  .nav-btn {
     flex: 1;
-    height: 36px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid transparent;
-    border-radius: 8px;
-    color: rgba(255, 255, 255, 0.7);
-    font-size: 0.75em;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    transition: all 0.2s;
-  }
-
-  .nav-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
-  }
-
-  .nav-btn.active {
-    background: var(--accent-glow);
-    border-color: var(--glass-border);
-    color: var(--primary-color);
-  }
-
-  .about-card, .settings-card {
-    margin-top: 16px;
+    overflow-y: auto;
     padding: 16px;
-    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .advanced-section {
+    margin-top: 24px;
+    padding: 20px 16px;
+    background: rgba(255, 255, 255, 0.02);
     border-radius: 12px;
     border: 1px solid var(--glass-border);
-    animation: fadeIn 0.3s ease-out;
-  }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .about-logo {
-    margin-bottom: 12px;
-    display: flex;
-    justify-content: center;
-  }
-
-  .about-card h3 {
-    margin: 0 0 4px 0;
-    text-align: center;
-    font-size: 1.1em;
-  }
-
-  .about-card p {
-    margin: 0 0 16px 0;
-    text-align: center;
-    font-size: 0.8em;
-    opacity: 0.6;
-  }
-
-  .about-details {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.7em;
-    opacity: 0.4;
-  }
-
-  .setting-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .setting-label {
-    font-size: 0.85em;
-    font-weight: 600;
-  }
-
-  .setting-desc {
-    font-size: 0.7em;
-    opacity: 0.5;
-  }
-
-  .toggle-btn {
-    padding: 6px 12px;
-    border-radius: 20px;
-    border: 1px solid var(--glass-border);
-    background: rgba(255, 255, 255, 0.05);
-    color: white;
-    font-size: 0.7em;
-    font-weight: 800;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .toggle-btn.active {
-    background: var(--primary-color);
-    color: black;
-    border-color: var(--primary-color);
+    min-height: 200px;
   }
 
   .theme-row {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    align-items: center;
+    margin-top: 8px;
   }
 
   .theme-selector {
     display: flex;
-    gap: 8px;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 6px;
-    border-radius: 20px;
+    gap: 12px;
   }
 
   .theme-dot {
@@ -656,27 +473,27 @@
     border-radius: 50%;
     border: 2px solid transparent;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: transform 0.2s;
   }
 
   .theme-dot.active {
     border-color: white;
-    transform: scale(1.2);
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
   }
 
   .eye-saver-toggle {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: white;
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 0.7em;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 600;
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--glass-border);
-    border-radius: 20px;
-    color: white;
-    font-size: 0.7em;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
   }
 
   .eye-saver-toggle.active {
@@ -785,8 +602,110 @@
   }
 
   .add-profile-btn:hover {
-    background: rgba(255, 255, 255, 0.03);
-    color: var(--primary-color);
+    border-style: solid;
     border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  /* About Card Styles */
+  .about-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .icon-container {
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .app-icon {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 0 2px rgba(0,0,0,0.3));
+  }
+
+  .about-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .about-header h3 {
+    margin: 0;
+    font-size: 1em;
+    color: var(--primary-color);
+  }
+
+  .about-card p {
+    font-size: 0.8em;
+    color: rgba(255, 255, 255, 0.6);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .stats {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px;
+    border-radius: 8px;
+  }
+
+  .stat-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75em;
+  }
+
+  .stat-label { color: rgba(255, 255, 255, 0.4); }
+
+  .about-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+  }
+
+  .back-btn {
+    background: var(--primary-color);
+    border: none;
+    color: white;
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    cursor: pointer;
+  }
+
+  .made-with {
+    font-size: 0.7em;
+    color: rgba(255, 255, 255, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  footer {
+    height: 30px;
+    background: rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    font-size: 0.7em;
+    color: rgba(255, 255, 255, 0.3);
+    letter-spacing: 0.5px;
   }
 </style>
