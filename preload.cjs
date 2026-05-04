@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // ============================================================
 // Channel whitelists — defence-in-depth for contextBridge
+// Prevents arbitrary IPC from reaching main process even if
+// renderer is compromised (e.g. malicious dependency in bundle).
 // ============================================================
 const VALID_SEND_CHANNELS = new Set([
   'close-app',
@@ -11,6 +13,7 @@ const VALID_SEND_CHANNELS = new Set([
   'toggle-session-mute',
   'set-session-volume',
   'set-master-volume',
+  'set-ducking',
 ]);
 
 const VALID_INVOKE_CHANNELS = new Set([

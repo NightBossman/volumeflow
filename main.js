@@ -177,7 +177,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false, // Required for some native APIs like getFileIcon if we want full integration, but safe here
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       additionalArguments: [`--vf-dev=${isDev}`],
     },
   });
@@ -317,6 +317,15 @@ ipcMain.on('set-window-size', (event, { width, height }) => {
     win.center();
   }
 });
+ipcMain.on('set-ducking', (event, data) => {
+  if (bridgeProcess && !bridgeProcess.killed) {
+    const cmd = JSON.stringify({
+      action: 'set_ducking',
+      ...data
+    });
+    bridgeProcess.stdin.write(cmd + '\n');
+  }
+});
 
 // Settings persistence
 const userDataPath = app.getPath('userData');
@@ -367,6 +376,7 @@ async function fadeToVolume(pid, targetVolume, duration = 800) {
   if (!result || !result.sessions || isQuitting) return;
   const session = result.sessions.find(s => s.pid === pid);
   if (!session) return;
+
 
   const startVol = session.volume;
   const diff = targetVolume - startVol;

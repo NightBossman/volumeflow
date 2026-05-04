@@ -14,7 +14,9 @@
     Activity,
     Info,
     Heart,
-    Power
+    Power,
+    Zap,
+    Mic
   } from '@lucide/svelte';
 
   const { ipcRenderer } = window.electron;
@@ -24,6 +26,12 @@
   let currentTheme = $state('midnight');
   let eyeSaver = $state(false);
   let autoStart = $state(false);
+
+  // Auto-Duck States
+  let duckingEnabled = $state(false);
+  let duckingTriggerPid = $state(-1);
+  let duckingThreshold = $state(0.05);
+  let duckingFactor = $state(0.2);
   let masterVolume = $state(75);
   let masterMuted = $state(false);
   let masterId = $state('');
@@ -50,26 +58,14 @@
 
       for (const process of processes) {
         if (process.path && !iconCache.has(process.path)) {
-          iconCache.set(process.path, 'loading'); 
-          ipcRenderer.invoke('get-app-icon', process.path).then(iconData => {
-            if (iconData) {
-              iconCache.set(process.path, iconData);
-              processes = [...processes];
-            } else {
-              iconCache.set(process.path, null);
-            }
+          iconCache.set(process.path, 'loading');
+          ipcRenderer.invoke('get-app-icon', process.path).then(icon => {
+            iconCache.set(process.path, icon);
           });
         }
       }
-
-      const info = await ipcRenderer.invoke('get-master-info');
-      if (info) {
-        masterVolume = Math.round(info.volume * 100);
-        masterMuted = info.muted;
-        masterId = info.id;
-      }
     } catch (e) {
-      console.error(e);
+      console.error('Failed to load sessions:', e);
     }
   }
 
@@ -78,8 +74,24 @@
       theme: currentTheme,
       eyeSaver: eyeSaver,
       autoStart: autoStart,
-      profiles: profiles
+      profiles: profiles,
+      ducking: {
+        enabled: duckingEnabled,
+        triggerPid: duckingTriggerPid,
+        threshold: duckingThreshold,
+        factor: duckingFactor
+      }
     }));
+  }
+
+  function updateDucking() {
+    ipcRenderer.send('set-ducking', {
+      enabled: duckingEnabled,
+      triggerPid: duckingTriggerPid,
+      threshold: duckingThreshold,
+      factor: duckingFactor
+    });
+    saveSettings();
   }
 
   function addProfile() {
@@ -165,6 +177,14 @@
         }
         if (savedSettings.profiles) {
           profiles = savedSettings.profiles;
+        }
+        if (savedSettings.ducking) {
+          duckingEnabled = savedSettings.ducking.enabled ?? false;
+          duckingTriggerPid = savedSettings.ducking.triggerPid ?? -1;
+          duckingThreshold = savedSettings.ducking.threshold ?? 0.05;
+          duckingFactor = savedSettings.ducking.factor ?? 0.2;
+          // Notify bridge immediately after load
+          setTimeout(updateDucking, 1000);
         }
       } else {
         document.body.setAttribute('data-theme', currentTheme);
@@ -289,6 +309,50 @@
               </button>
             </div>
 
+            <div class="section-title" style="margin-top: 24px">Auto-Duck (Inteligentne Wyciszanie)</div>
+            <div class="ducking-card">
+              <div class="ducking-row">
+                <div class="ducking-info">
+                  <Zap size={14} color="var(--primary-color)" />
+                  <span>Aktywuj Auto-Duck</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" bind:checked={duckingEnabled} onchange={updateDucking}>
+                  <span class="slider round"></span>
+                </label>
+              </div>
+              
+              {#if duckingEnabled}
+                <div class="ducking-settings">
+                  <div class="duck-setting-item">
+                    <label>Proces wyzwalający (Trigger):</label>
+                    <select bind:value={duckingTriggerPid} onchange={updateDucking}>
+                      <option value={-1}>Wybierz proces...</option>
+                      {#each processes as p}
+                        <option value={p.pid}>{p.name} (PID: {p.pid})</option>
+                      {/each}
+                    </select>
+                  </div>
+                  
+                  <div class="duck-setting-item">
+                    <div class="label-row">
+                      <label>Czułość (Threshold):</label>
+                      <span>{(duckingThreshold * 100).toFixed(0)}%</span>
+                    </div>
+                    <input type="range" min="0.01" max="0.5" step="0.01" bind:value={duckingThreshold} oninput={updateDucking}>
+                  </div>
+                  
+                  <div class="duck-setting-item">
+                    <div class="label-row">
+                      <label>Siła wyciszenia (Duck Factor):</label>
+                      <span>{(duckingFactor * 100).toFixed(0)}%</span>
+                    </div>
+                    <input type="range" min="0.05" max="0.8" step="0.05" bind:value={duckingFactor} oninput={updateDucking}>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
             <div class="section-title" style="margin-top: 24px">Tryb Scen (Profile)</div>
           <div class="profiles-container">
             <div class="profiles-list">
@@ -321,7 +385,7 @@
             <div class="about-card">
               <div class="about-header">
                 <Activity size={24} color="var(--primary-color)" />
-                <h3>VolumeFlow v1.0.0</h3>
+                <h3>VolumeFlow v1.5.1</h3>
               </div>
               <p>Premium Windows Audio Mixer stworzony z myślą o estetyce i wydajności.</p>
               <div class="stats">
@@ -331,7 +395,7 @@
                 </div>
                 <div class="stat-item">
                   <span class="stat-label">Status:</span>
-                  <span class="stat-val">Stabilny (v1.0.0)</span>
+                  <span class="stat-val">Hardened (v1.5.1)</span>
                 </div>
               </div>
               <div class="about-footer">
@@ -532,6 +596,111 @@
     background: var(--primary-color);
     border-color: var(--primary-color);
   }
+
+  /* Ducking UI */
+  .ducking-card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 20px;
+    transition: all 0.3s ease;
+  }
+
+  .ducking-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .ducking-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85em;
+    font-weight: 600;
+  }
+
+  .ducking-settings {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--glass-border);
+    animation: slideDown 0.3s ease;
+  }
+
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .duck-setting-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .duck-setting-item label {
+    font-size: 0.7em;
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 600;
+  }
+
+  .duck-setting-item select {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--glass-border);
+    color: white;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 0.85em;
+    outline: none;
+  }
+
+  .label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .label-row span {
+    font-size: 0.75em;
+    color: var(--primary-color);
+    font-weight: 700;
+  }
+
+  /* Switch Style */
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+  }
+
+  .switch input { opacity: 0; width: 0; height: 0; }
+
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(255,255,255,0.1);
+    transition: .4s;
+  }
+
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 14px; width: 14px;
+    left: 3px; bottom: 3px;
+    background-color: white;
+    transition: .4s;
+  }
+
+  input:checked + .slider { background-color: var(--primary-color); }
+  input:checked + .slider:before { transform: translateX(16px); }
+  .slider.round { border-radius: 20px; }
+  .slider.round:before { border-radius: 50%; }
 
   /* Profiles UI */
   .profiles-container {
