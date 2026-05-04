@@ -150,12 +150,24 @@ namespace VolumeFlow
     // Audio Bridge
     // ============================================================
 
+    class DuckingSettings {
+        public bool Enabled = false;
+        public int TriggerPid = -1;
+        public float Threshold = 0.05f;
+        public float Factor = 0.2f;
+        public float FadeSpeed = 0.05f; // Per poll (100ms)
+    }
+
     class AudioBridge
     {
         static string lastSessionsJson = "{\"status\":\"ok\",\"sessions\":[]}";
         static readonly object sessionsLock = new object();
         static readonly object stdoutLock = new object();
         static volatile bool shouldExit = false;
+
+        static DuckingSettings duckSettings = new DuckingSettings();
+        static Dictionary<int, float> baseVolumes = new Dictionary<int, float>();
+        static Dictionary<int, float> currentFades = new Dictionary<int, float>(); // 1.0 = normal, <1.0 = ducked
 
         static void Log(string msg) {
             try {
@@ -172,7 +184,7 @@ namespace VolumeFlow
 
         static void Main(string[] args)
         {
-            Log("Bridge starting (V1.5.0 - Reliability Update)...");
+            Log("Bridge starting (V1.5.1 - Auto-Duck Support)...");
             Console.OutputEncoding = Encoding.UTF8;
             Console.InputEncoding = Encoding.UTF8;
 
@@ -223,6 +235,9 @@ namespace VolumeFlow
                                 HandleToggleMute(pidMute, requestId);
                             }
                             break;
+                        case "set_ducking":
+                            HandleSetDucking(dict, requestId);
+                            break;
                         case "ping": 
                             lock (stdoutLock) {
                                 string resp = "{\"status\":\"pong\"" + (requestId != null ? ",\"requestId\":\"" + requestId + "\"" : "") + "}";
@@ -244,9 +259,25 @@ namespace VolumeFlow
             peakThread.Join(1000);
         }
 
+        static void HandleSetDucking(Dictionary<string, object> dict, string requestId) {
+            try {
+                if (dict.ContainsKey("enabled")) duckSettings.Enabled = Convert.ToBoolean(dict["enabled"]);
+                if (dict.ContainsKey("triggerPid")) duckSettings.TriggerPid = Convert.ToInt32(dict["triggerPid"]);
+                if (dict.ContainsKey("threshold")) duckSettings.Threshold = Convert.ToSingle(dict["threshold"], CultureInfo.InvariantCulture);
+                if (dict.ContainsKey("factor")) duckSettings.Factor = Convert.ToSingle(dict["factor"], CultureInfo.InvariantCulture);
+                
+                if (requestId != null) {
+                    lock (stdoutLock) {
+                        Console.WriteLine("{\"status\":\"ok\",\"requestId\":\"" + requestId + "\"}");
+                        Console.Out.Flush();
+                    }
+                }
+            } catch (Exception ex) { Log("SetDucking Error: " + ex.Message); }
+        }
+
         static void PeakPollingLoop()
         {
-            Log("Peak thread started (V1.5.0)");
+            Log("Peak thread started (V1.5.1)");
             string lastDeviceId = null;
             IMMDevice bestDevice = null;
             IAudioSessionManager2 bestManager = null;
@@ -260,7 +291,7 @@ namespace VolumeFlow
                     try
                     {
                         IMMDevice currentDevice = null;
-                        int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out currentDevice); // eRender, eConsole
+                        int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out currentDevice);
                         if (res != 0 || currentDevice == null) {
                             System.Threading.Thread.Sleep(1000);
                             continue;
@@ -294,7 +325,6 @@ namespace VolumeFlow
 
                                 bestDevice = currentDevice;
                                 lastDeviceId = currentId;
-                                Log("Device activation successful.");
                             } catch (Exception ex) {
                                 Log("Device activation failed: " + ex.Message);
                                 Marshal.ReleaseComObject(currentDevice);
@@ -321,77 +351,96 @@ namespace VolumeFlow
                                 
                                 var activeSessions = new List<SessionInfo>();
                                 var sessListJson = new List<string>();
+                                
+                                // 1. Find if Trigger is active
+                                bool triggerAboveThreshold = false;
+                                if (duckSettings.Enabled && duckSettings.TriggerPid > 0) {
+                                    for (int s = 0; s < sessionCount; s++) {
+                                        IAudioSessionControl control = null;
+                                        try {
+                                            sessionEnum.GetSession(s, out control);
+                                            IAudioSessionControl2 c2 = control as IAudioSessionControl2;
+                                            if (c2 != null) {
+                                                int pid;
+                                                c2.GetProcessId(out pid);
+                                                if (pid == duckSettings.TriggerPid) {
+                                                    IAudioMeterInformation meter = control as IAudioMeterInformation;
+                                                    if (meter != null) {
+                                                        float peak;
+                                                        meter.GetPeakValue(out peak);
+                                                        if (peak >= duckSettings.Threshold) triggerAboveThreshold = true;
+                                                    }
+                                                }
+                                            }
+                                        } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
+                                        if (triggerAboveThreshold) break;
+                                    }
+                                }
 
+                                // 2. Process all sessions
                                 for (int s = 0; s < sessionCount; s++) {
                                     IAudioSessionControl control = null;
                                     try {
                                         sessionEnum.GetSession(s, out control);
                                         if (control == null) continue;
 
-                                        Guid iidControl2 = new Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d");
-                                        Guid iidVolume = new Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8");
-                                        Guid iidMeter = new Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064");
+                                        IAudioSessionControl2 control2 = control as IAudioSessionControl2;
+                                        ISimpleAudioVolume volume = control as ISimpleAudioVolume;
+                                        IAudioMeterInformation sessMeter = control as IAudioMeterInformation;
 
-                                        IntPtr pUnk = Marshal.GetIUnknownForObject(control);
-                                        IAudioSessionControl2 control2 = null;
-                                        ISimpleAudioVolume volume = null;
-                                        IAudioMeterInformation sessMeter = null;
+                                        if (control2 != null && volume != null) {
+                                            int pid = -1;
+                                            control2.GetProcessId(out pid);
+                                            if (pid > 0) {
+                                                float peak = 0;
+                                                if (sessMeter != null) sessMeter.GetPeakValue(out peak);
+                                                
+                                                float currentVol;
+                                                bool muted;
+                                                volume.GetMasterVolume(out currentVol);
+                                                volume.GetMute(out muted);
 
-                                        try {
-                                            IntPtr pIid2;
-                                            if (Marshal.QueryInterface(pUnk, ref iidControl2, out pIid2) == 0) {
-                                                control2 = Marshal.GetObjectForIUnknown(pIid2) as IAudioSessionControl2;
-                                                Marshal.Release(pIid2);
-                                            }
-                                            IntPtr pIidVol;
-                                            if (Marshal.QueryInterface(pUnk, ref iidVolume, out pIidVol) == 0) {
-                                                volume = Marshal.GetObjectForIUnknown(pIidVol) as ISimpleAudioVolume;
-                                                Marshal.Release(pIidVol);
-                                            }
-                                            IntPtr pIidMeter;
-                                            if (Marshal.QueryInterface(pUnk, ref iidMeter, out pIidMeter) == 0) {
-                                                sessMeter = Marshal.GetObjectForIUnknown(pIidMeter) as IAudioMeterInformation;
-                                                Marshal.Release(pIidMeter);
-                                            }
+                                                // Update base volume (only if we are NOT ducking or if user changed it)
+                                                if (!currentFades.ContainsKey(pid)) currentFades[pid] = 1.0f;
+                                                
+                                                float targetFade = (duckSettings.Enabled && triggerAboveThreshold && pid != duckSettings.TriggerPid) 
+                                                    ? duckSettings.Factor 
+                                                    : 1.0f;
 
-                                            if (control2 != null) {
-                                                int pid = -1;
-                                                control2.GetProcessId(out pid);
-                                                if (pid > 0) {
-                                                    float peak = 0;
-                                                    if (sessMeter != null) sessMeter.GetPeakValue(out peak);
-                                                    float vol = 0;
-                                                    bool muted = false;
-                                                    if (volume != null) {
-                                                        volume.GetMasterVolume(out vol);
-                                                        volume.GetMute(out muted);
-                                                    }
+                                                // Smooth fade logic
+                                                if (currentFades[pid] != targetFade) {
+                                                    if (currentFades[pid] < targetFade) 
+                                                        currentFades[pid] = Math.Min(targetFade, currentFades[pid] + duckSettings.FadeSpeed);
+                                                    else 
+                                                        currentFades[pid] = Math.Max(targetFade, currentFades[pid] - duckSettings.FadeSpeed);
 
-                                                    string processName = "Unknown";
-                                                    try { 
-                                                        using (var p = Process.GetProcessById(pid)) {
-                                                            processName = p.ProcessName;
-                                                            if (!string.IsNullOrEmpty(processName)) {
-                                                                processName = char.ToUpper(processName[0]) + processName.Substring(1);
-                                                            }
+                                                    // Apply volume if not muted
+                                                    if (!muted) {
+                                                        if (targetFade == 1.0f && currentFades[pid] == 1.0f) {
+                                                            baseVolumes[pid] = currentVol;
                                                         }
-                                                    } catch {}
-
-                                                    activeSessions.Add(new SessionInfo { ProcessId = pid, PeakValue = peak });
-                                                    
-                                                    var serializer = new JavaScriptSerializer();
-                                                    sessListJson.Add("{\"pid\":" + pid + ",\"name\":" + serializer.Serialize(processName) + ",\"volume\":" + vol.ToString("F4", CultureInfo.InvariantCulture) + ",\"muted\":" + (muted?"true":"false") + "}");
+                                                        
+                                                        float baseVol = baseVolumes.ContainsKey(pid) ? baseVolumes[pid] : currentVol;
+                                                        volume.SetMasterVolume(baseVol * currentFades[pid], Guid.Empty);
+                                                    }
+                                                } else if (targetFade == 1.0f) {
+                                                    baseVolumes[pid] = currentVol;
                                                 }
+
+                                                string processName = "Unknown";
+                                                try { 
+                                                    using (var p = Process.GetProcessById(pid)) {
+                                                        processName = p.ProcessName;
+                                                        if (!string.IsNullOrEmpty(processName)) processName = char.ToUpper(processName[0]) + processName.Substring(1);
+                                                    }
+                                                } catch {}
+
+                                                activeSessions.Add(new SessionInfo { ProcessId = pid, PeakValue = peak });
+                                                var serializer = new JavaScriptSerializer();
+                                                sessListJson.Add("{\"pid\":" + pid + ",\"name\":" + serializer.Serialize(processName) + ",\"volume\":" + currentVol.ToString("F4", CultureInfo.InvariantCulture) + ",\"muted\":" + (muted?"true":"false") + "}");
                                             }
-                                        } finally {
-                                            if (control2 != null) Marshal.ReleaseComObject(control2);
-                                            if (volume != null) Marshal.ReleaseComObject(volume);
-                                            if (sessMeter != null) Marshal.ReleaseComObject(sessMeter);
-                                            Marshal.Release(pUnk);
                                         }
-                                    } catch {} finally {
-                                        if (control != null) Marshal.ReleaseComObject(control);
-                                    }
+                                    } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
                                 }
                                 
                                 float masterPeak = 0;
@@ -425,10 +474,7 @@ namespace VolumeFlow
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Log("Fatal Peak Error: " + ex.ToString());
-            }
+            catch (Exception ex) { Log("Fatal Peak Error: " + ex.ToString()); }
             finally {
                 if (bestMeter != null) Marshal.ReleaseComObject(bestMeter);
                 if (bestManager != null) Marshal.ReleaseComObject(bestManager);
@@ -440,9 +486,7 @@ namespace VolumeFlow
             lock (sessionsLock) {
                 lock (stdoutLock) {
                     string json = lastSessionsJson;
-                    if (requestId != null) {
-                        json = json.Substring(0, json.Length - 1) + ",\"requestId\":\"" + requestId + "\"}";
-                    }
+                    if (requestId != null) json = json.Substring(0, json.Length - 1) + ",\"requestId\":\"" + requestId + "\"}";
                     Console.WriteLine(json);
                     Console.Out.Flush();
                 }
@@ -471,15 +515,15 @@ namespace VolumeFlow
                     Console.WriteLine(resp);
                     Console.Out.Flush();
                 }
-            } catch (Exception ex) { 
-                Log("Master Error: " + ex.Message); 
-            } finally {
+            } catch (Exception ex) { Log("Master Error: " + ex.Message); } 
+            finally {
                 if (volObj != null) Marshal.ReleaseComObject(volObj);
                 if (device != null) Marshal.ReleaseComObject(device);
             }
         }
 
         static void HandleSetVolume(int pid, float vol, string requestId) {
+            baseVolumes[pid] = vol;
             IMMDevice device = null;
             IAudioSessionManager2 manager = null;
             IAudioSessionEnumerator sessionEnum = null;
@@ -487,12 +531,10 @@ namespace VolumeFlow
                 var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                 int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
                 if (res != 0 || device == null) return;
-
                 Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
                 object mObj2;
                 device.Activate(ref iidManager2, 7, IntPtr.Zero, out mObj2);
                 manager = mObj2 as IAudioSessionManager2;
-                
                 if (manager != null) {
                     if (manager.GetSessionEnumerator(out sessionEnum) == 0 && sessionEnum != null) {
                         int sessionCount;
@@ -501,42 +543,19 @@ namespace VolumeFlow
                             IAudioSessionControl control = null;
                             try {
                                 sessionEnum.GetSession(s, out control);
-                                if (control == null) continue;
-
-                                IntPtr pUnk = Marshal.GetIUnknownForObject(control);
-                                Guid iidControl2 = new Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d");
-                                IntPtr pIid2;
-                                if (Marshal.QueryInterface(pUnk, ref iidControl2, out pIid2) == 0) {
-                                    var control2 = Marshal.GetObjectForIUnknown(pIid2) as IAudioSessionControl2;
-                                    Marshal.Release(pIid2);
-                                    if (control2 != null) {
-                                        try {
-                                            int cPid;
-                                            control2.GetProcessId(out cPid);
-                                            if (cPid == pid) {
-                                                Guid iidVolume = new Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8");
-                                                IntPtr pIidVol;
-                                                if (Marshal.QueryInterface(pUnk, ref iidVolume, out pIidVol) == 0) {
-                                                    var volume = Marshal.GetObjectForIUnknown(pIidVol) as ISimpleAudioVolume;
-                                                    Marshal.Release(pIidVol);
-                                                    if (volume != null) {
-                                                        try {
-                                                            volume.SetMasterVolume(vol, Guid.Empty);
-                                                        } finally {
-                                                            Marshal.ReleaseComObject(volume);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        } finally {
-                                            Marshal.ReleaseComObject(control2);
+                                IAudioSessionControl2 control2 = control as IAudioSessionControl2;
+                                if (control2 != null) {
+                                    int cPid;
+                                    control2.GetProcessId(out cPid);
+                                    if (cPid == pid) {
+                                        ISimpleAudioVolume volume = control as ISimpleAudioVolume;
+                                        if (volume != null) {
+                                            float fade = currentFades.ContainsKey(pid) ? currentFades[pid] : 1.0f;
+                                            volume.SetMasterVolume(vol * fade, Guid.Empty);
                                         }
                                     }
                                 }
-                                Marshal.Release(pUnk);
-                            } catch {} finally {
-                                if (control != null) Marshal.ReleaseComObject(control);
-                            }
+                            } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
                         }
                     }
                 }
@@ -561,12 +580,10 @@ namespace VolumeFlow
                 var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                 int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
                 if (res != 0 || device == null) return;
-
                 Guid iidVol = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
                 device.Activate(ref iidVol, 7, IntPtr.Zero, out volObj);
                 var volume = (IAudioEndpointVolume)volObj;
                 volume.SetMasterVolumeLevelScalar(vol, Guid.Empty);
-
                 if (requestId != null) {
                     lock (stdoutLock) {
                         Console.WriteLine("{\"status\":\"ok\",\"requestId\":\"" + requestId + "\"}");
@@ -588,12 +605,10 @@ namespace VolumeFlow
                 var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                 int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
                 if (res != 0 || device == null) return;
-
                 Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
                 object mObj2;
                 device.Activate(ref iidManager2, 7, IntPtr.Zero, out mObj2);
                 manager = mObj2 as IAudioSessionManager2;
-                
                 if (manager != null) {
                     if (manager.GetSessionEnumerator(out sessionEnum) == 0 && sessionEnum != null) {
                         int sessionCount;
@@ -602,44 +617,20 @@ namespace VolumeFlow
                             IAudioSessionControl control = null;
                             try {
                                 sessionEnum.GetSession(s, out control);
-                                if (control == null) continue;
-
-                                IntPtr pUnk = Marshal.GetIUnknownForObject(control);
-                                Guid iidControl2 = new Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d");
-                                IntPtr pIid2;
-                                if (Marshal.QueryInterface(pUnk, ref iidControl2, out pIid2) == 0) {
-                                    var control2 = Marshal.GetObjectForIUnknown(pIid2) as IAudioSessionControl2;
-                                    Marshal.Release(pIid2);
-                                    if (control2 != null) {
-                                        try {
-                                            int cPid;
-                                            control2.GetProcessId(out cPid);
-                                            if (cPid == pid) {
-                                                Guid iidVolume = new Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8");
-                                                IntPtr pIidVol;
-                                                if (Marshal.QueryInterface(pUnk, ref iidVolume, out pIidVol) == 0) {
-                                                    var volume = Marshal.GetObjectForIUnknown(pIidVol) as ISimpleAudioVolume;
-                                                    Marshal.Release(pIidVol);
-                                                    if (volume != null) {
-                                                        try {
-                                                            bool currentMute;
-                                                            volume.GetMute(out currentMute);
-                                                            volume.SetMute(!currentMute, Guid.Empty);
-                                                        } finally {
-                                                            Marshal.ReleaseComObject(volume);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        } finally {
-                                            Marshal.ReleaseComObject(control2);
+                                IAudioSessionControl2 control2 = control as IAudioSessionControl2;
+                                if (control2 != null) {
+                                    int cPid;
+                                    control2.GetProcessId(out cPid);
+                                    if (cPid == pid) {
+                                        ISimpleAudioVolume volume = control as ISimpleAudioVolume;
+                                        if (volume != null) {
+                                            bool currentMute;
+                                            volume.GetMute(out currentMute);
+                                            volume.SetMute(!currentMute, Guid.Empty);
                                         }
                                     }
                                 }
-                                Marshal.Release(pUnk);
-                            } catch {} finally {
-                                if (control != null) Marshal.ReleaseComObject(control);
-                            }
+                            } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
                         }
                     }
                 }
@@ -657,5 +648,4 @@ namespace VolumeFlow
             }
         }
     }
-
 }
