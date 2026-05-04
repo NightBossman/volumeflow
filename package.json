@@ -1,8 +1,12 @@
 {
   "name": "volumeflow",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Premium Windows Audio Mixer",
   "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NightBossman/volumeflow.git"
+  },
   "scripts": {
     "dev": "concurrently \"vite\" \"cross-env NODE_ENV=development electron .\"",
     "build": "vite build && electron-builder",
@@ -42,13 +46,13 @@
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
-    "electron": "^41.3.0",
+    "electron": "^41.0.0",
     "electron-builder": "^26.8.1",
     "electron-packager": "^17.1.2",
     "svelte": "^5.55.5",
     "vite": "^8.0.10"
   },
   "dependencies": {
-    "lucide-svelte": "^1.0.1"
+    "@lucide/svelte": "^1.14.0"
   }
 }

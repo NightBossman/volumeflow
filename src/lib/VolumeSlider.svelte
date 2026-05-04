@@ -1,5 +1,5 @@
 <script>
-  import { Volume2, VolumeX, AppWindow } from 'lucide-svelte';
+  import { Volume2, VolumeX, AppWindow } from '@lucide/svelte';
   let { 
     value = $bindable(50), 
     label = "Aplikacja", 
