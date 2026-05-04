@@ -5,6 +5,8 @@ using System.Text;
 using System.Globalization;
 using System.Collections.Generic;
 using System.Web.Script.Serialization;
+using System.IO;
+using System.Threading;
 
 namespace VolumeFlow
 {
@@ -141,9 +143,67 @@ namespace VolumeFlow
         [PreserveSig] int GetVolumeRange(out float minLevel, out float maxLevel, out float increment);
     }
 
+    [ComImport, Guid("1CB9AD4C-DBA4-4c53-9D54-6451E8F752BF"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IAudioClient {
+        [PreserveSig] int Initialize(int shareMode, int streamFlags, long hnsBufferDuration, long hnsPeriodicity, [In] WaveFormat pFormat, [In] ref Guid audioSessionGuid);
+        [PreserveSig] int GetBufferSize(out uint bufferSize);
+        [PreserveSig] int GetStreamLatency(out long hnsLatency);
+        [PreserveSig] int GetCurrentPadding(out uint numPaddingFrames);
+        [PreserveSig] int IsFormatSupported(int shareMode, [In] WaveFormat pFormat, out IntPtr ppClosestMatch);
+        [PreserveSig] int GetMixFormat(out IntPtr ppDeviceFormat);
+        [PreserveSig] int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
+        [PreserveSig] int Start();
+        [PreserveSig] int Stop();
+        [PreserveSig] int Reset();
+        [PreserveSig] int SetEventHandle(IntPtr eventHandle);
+        [PreserveSig] int GetService([In, MarshalAs(UnmanagedType.LPStruct)] Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
+    }
+
+    [ComImport, Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD19F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IAudioCaptureClient {
+        [PreserveSig] int GetBuffer(out IntPtr ppData, out uint pNumFramesToRead, out int pdwFlags, out long pu64DevicePosition, out long pu64QPCPosition);
+        [PreserveSig] int ReleaseBuffer(uint numFramesRead);
+        [PreserveSig] int GetNextPacketSize(out uint pNumFramesInNextPacket);
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 2)]
+    public class WaveFormat {
+        public short wFormatTag;
+        public short nChannels;
+        public int nSamplesPerSec;
+        public int nAvgBytesPerSec;
+        public short nBlockAlign;
+        public short wBitsPerSample;
+        public short cbSize;
+
+        public static WaveFormat CreateIeeeFloat(int sampleRate, int channels) {
+            WaveFormat wf = new WaveFormat();
+            wf.wFormatTag = 3; // WAVE_FORMAT_IEEE_FLOAT
+            wf.nChannels = (short)channels;
+            wf.nSamplesPerSec = sampleRate;
+            wf.wBitsPerSample = 32;
+            wf.nBlockAlign = (short)(channels * 4);
+            wf.nAvgBytesPerSec = wf.nSamplesPerSec * wf.nBlockAlign;
+            wf.cbSize = 0;
+            return wf;
+        }
+    }
+
     class SessionInfo {
         public int ProcessId;
         public float PeakValue;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AUDIOCLIENT_ACTIVATION_PARAMS {
+        public int ActivationParamsType; // 1 = Process Loopback
+        public AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS ProcessLoopbackParams;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+        public uint TargetProcessId;
+        public int ProcessLoopbackMode; // 0 = Include, 1 = Exclude
     }
 
     // ============================================================
@@ -168,6 +228,146 @@ namespace VolumeFlow
         static DuckingSettings duckSettings = new DuckingSettings();
         static Dictionary<int, float> baseVolumes = new Dictionary<int, float>();
         static Dictionary<int, float> currentFades = new Dictionary<int, float>(); // 1.0 = normal, <1.0 = ducked
+        static bool globalBoostActive = false;
+        static float boostReductionFactor = 0.6f; // Reduce others to 60% when boost is on
+
+        static Dictionary<int, RecordingSession> activeRecordings = new Dictionary<int, RecordingSession>();
+
+        class RecordingSession {
+            public int Pid;
+            public string FilePath;
+            private volatile bool running = false;
+            private System.Threading.Thread thread;
+
+            public void Start() {
+                running = true;
+                thread = new System.Threading.Thread(RecordLoop);
+                thread.SetApartmentState(System.Threading.ApartmentState.MTA);
+                thread.Start();
+            }
+
+            public void Stop() {
+                running = false;
+                if (thread != null) thread.Join(1000);
+            }
+
+            private void RecordLoop() {
+                IMMDevice device = null;
+                IAudioClient audioClient = null;
+                IAudioCaptureClient captureClient = null;
+                System.IO.FileStream fs = null;
+                IntPtr formatPtr = IntPtr.Zero;
+
+                try {
+                    var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                    deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
+                    if (device == null) return;
+
+                    // Activate with Process Loopback
+                    var activationParams = new AUDIOCLIENT_ACTIVATION_PARAMS();
+                    activationParams.ActivationParamsType = 1; // PROCESS_LOOPBACK
+                    activationParams.ProcessLoopbackParams.TargetProcessId = (uint)Pid;
+                    activationParams.ProcessLoopbackParams.ProcessLoopbackMode = 0; // INCLUDE
+
+                    IntPtr pParams = Marshal.AllocHGlobal(Marshal.SizeOf(activationParams));
+                    Marshal.StructureToPtr(activationParams, pParams, false);
+
+                    Guid iidAudioClient = new Guid("1CB9AD4C-DBA4-4c53-9D54-6451E8F752BF");
+                    object clientObj;
+                    // Note: Use 0x01 (CLSCTX_ALL) and pass pParams
+                    device.Activate(ref iidAudioClient, 1, pParams, out clientObj);
+                    Marshal.FreeHGlobal(pParams);
+
+                    audioClient = clientObj as IAudioClient;
+                    if (audioClient == null) return;
+
+                    audioClient.GetMixFormat(out formatPtr);
+                    WaveFormat format = (WaveFormat)Marshal.PtrToStructure(formatPtr, typeof(WaveFormat));
+
+                    // Initialize in Loopback mode (0x00020000 = AUDCLNT_STREAMFLAGS_LOOPBACK)
+                    Guid sessionGuid = Guid.Empty;
+                    audioClient.Initialize(0, 0x00020000, 10000000, 0, format, ref sessionGuid);
+
+                    uint bufferSize;
+                    audioClient.GetBufferSize(out bufferSize);
+
+                    object captureObj;
+                    Guid iidCapture = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD19F");
+                    audioClient.GetService(iidCapture, out captureObj);
+                    captureClient = captureObj as IAudioCaptureClient;
+
+                    // Prepare WAV file
+                    string dir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Recordings");
+                    if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+                    FilePath = System.IO.Path.Combine(dir, "Record_" + Pid + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".wav");
+                    
+                    fs = new System.IO.FileStream(FilePath, System.IO.FileMode.Create);
+                    // Placeholder for WAV header (44 bytes)
+                    byte[] emptyHeader = new byte[44];
+                    fs.Write(emptyHeader, 0, 44);
+
+                    uint totalBytes = 0;
+                    audioClient.Start();
+
+                    while (running) {
+                        uint nextPacketSize;
+                        captureClient.GetNextPacketSize(out nextPacketSize);
+                        while (nextPacketSize > 0) {
+                            IntPtr pData;
+                            uint numFramesRead;
+                            int flags;
+                            long pos, qpc;
+                            captureClient.GetBuffer(out pData, out numFramesRead, out flags, out pos, out qpc);
+                            
+                            if (numFramesRead > 0) {
+                                int bytesRead = (int)(numFramesRead * format.nBlockAlign);
+                                byte[] buffer = new byte[bytesRead];
+                                Marshal.Copy(pData, buffer, 0, bytesRead);
+                                fs.Write(buffer, 0, bytesRead);
+                                totalBytes += (uint)bytesRead;
+                            }
+                            captureClient.ReleaseBuffer(numFramesRead);
+                            captureClient.GetNextPacketSize(out nextPacketSize);
+                        }
+                        System.Threading.Thread.Sleep(10);
+                    }
+
+                    audioClient.Stop();
+
+                    // Update WAV header
+                    fs.Position = 0;
+                    WriteWavHeader(fs, totalBytes, format);
+                    fs.Close();
+
+                    Log("Saved recording to: " + FilePath);
+                } catch (Exception ex) {
+                    Log("Recording Error (PID " + Pid + "): " + ex.Message);
+                } finally {
+                    if (formatPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(formatPtr);
+                    if (captureClient != null) Marshal.ReleaseComObject(captureClient);
+                    if (audioClient != null) Marshal.ReleaseComObject(audioClient);
+                    if (device != null) Marshal.ReleaseComObject(device);
+                    if (fs != null) fs.Dispose();
+                }
+            }
+
+            private void WriteWavHeader(System.IO.FileStream fs, uint dataSize, WaveFormat format) {
+                var writer = new System.IO.BinaryWriter(fs);
+                writer.Write(Encoding.ASCII.GetBytes("RIFF"));
+                writer.Write(dataSize + 36);
+                writer.Write(Encoding.ASCII.GetBytes("WAVE"));
+                writer.Write(Encoding.ASCII.GetBytes("fmt "));
+                writer.Write(16); // subchunk1size
+                writer.Write(format.wFormatTag);
+                writer.Write(format.nChannels);
+                writer.Write(format.nSamplesPerSec);
+                writer.Write(format.nAvgBytesPerSec);
+                writer.Write(format.nBlockAlign);
+                writer.Write(format.wBitsPerSample);
+                writer.Write(Encoding.ASCII.GetBytes("data"));
+                writer.Write(dataSize);
+            }
+        }
 
         static void Log(string msg) {
             try {
@@ -184,7 +384,7 @@ namespace VolumeFlow
 
         static void Main(string[] args)
         {
-            Log("Bridge starting (V1.5.1 - Auto-Duck Support)...");
+            Log("Bridge starting (V1.6.0 - Recording & Boost Support)...");
             Console.OutputEncoding = Encoding.UTF8;
             Console.InputEncoding = Encoding.UTF8;
 
@@ -238,6 +438,24 @@ namespace VolumeFlow
                         case "set_ducking":
                             HandleSetDucking(dict, requestId);
                             break;
+                        case "start_recording":
+                            if (dict.ContainsKey("pid")) {
+                                int rPid = Convert.ToInt32(dict["pid"]);
+                                HandleStartRecording(rPid, requestId);
+                            }
+                            break;
+                        case "stop_recording":
+                            if (dict.ContainsKey("pid")) {
+                                int sPid = Convert.ToInt32(dict["pid"]);
+                                HandleStopRecording(sPid, requestId);
+                            }
+                            break;
+                        case "set_boost":
+                            if (dict.ContainsKey("active")) {
+                                bool bActive = Convert.ToBoolean(dict["active"]);
+                                HandleSetBoost(bActive, requestId);
+                            }
+                            break;
                         case "ping": 
                             lock (stdoutLock) {
                                 string resp = "{\"status\":\"pong\"" + (requestId != null ? ",\"requestId\":\"" + requestId + "\"" : "") + "}";
@@ -277,7 +495,7 @@ namespace VolumeFlow
 
         static void PeakPollingLoop()
         {
-            Log("Peak thread started (V1.5.1)");
+            Log("Peak thread started (V1.6.0)");
             string lastDeviceId = null;
             IMMDevice bestDevice = null;
             IAudioSessionManager2 bestManager = null;
@@ -416,6 +634,9 @@ namespace VolumeFlow
 
                                                     // Apply volume if not muted
                                                     if (!muted) {
+                                                        // We need the "unfaded" volume to apply the fade correctly.
+                                                        // For now, we assume currentVol is what it is, but this can cause downward spirals.
+                                                        // Better: only store baseVolumes when targetFade is 1.0
                                                         if (targetFade == 1.0f && currentFades[pid] == 1.0f) {
                                                             baseVolumes[pid] = currentVol;
                                                         }
@@ -523,7 +744,9 @@ namespace VolumeFlow
         }
 
         static void HandleSetVolume(int pid, float vol, string requestId) {
+            // Update base volume even if ducking
             baseVolumes[pid] = vol;
+            
             IMMDevice device = null;
             IAudioSessionManager2 manager = null;
             IAudioSessionEnumerator sessionEnum = null;
@@ -531,10 +754,12 @@ namespace VolumeFlow
                 var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                 int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
                 if (res != 0 || device == null) return;
+
                 Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
                 object mObj2;
                 device.Activate(ref iidManager2, 7, IntPtr.Zero, out mObj2);
                 manager = mObj2 as IAudioSessionManager2;
+                
                 if (manager != null) {
                     if (manager.GetSessionEnumerator(out sessionEnum) == 0 && sessionEnum != null) {
                         int sessionCount;
@@ -543,6 +768,7 @@ namespace VolumeFlow
                             IAudioSessionControl control = null;
                             try {
                                 sessionEnum.GetSession(s, out control);
+                                if (control == null) continue;
                                 IAudioSessionControl2 control2 = control as IAudioSessionControl2;
                                 if (control2 != null) {
                                     int cPid;
@@ -550,8 +776,10 @@ namespace VolumeFlow
                                     if (cPid == pid) {
                                         ISimpleAudioVolume volume = control as ISimpleAudioVolume;
                                         if (volume != null) {
+                                            // Apply actual volume based on current fade and boost
                                             float fade = currentFades.ContainsKey(pid) ? currentFades[pid] : 1.0f;
-                                            volume.SetMasterVolume(vol * fade, Guid.Empty);
+                                            float boost = globalBoostActive ? boostReductionFactor : 1.0f;
+                                            volume.SetMasterVolume(vol * fade * boost, Guid.Empty);
                                         }
                                     }
                                 }
@@ -645,6 +873,96 @@ namespace VolumeFlow
                 if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
                 if (manager != null) Marshal.ReleaseComObject(manager);
                 if (device != null) Marshal.ReleaseComObject(device);
+            }
+        }
+
+        static void HandleSetBoost(bool active, string requestId) {
+            globalBoostActive = active;
+            Log("Smart Overdrive " + (active ? "Enabled" : "Disabled"));
+
+            // Refresh all volumes immediately
+            IMMDevice device = null;
+            IAudioSessionManager2 manager = null;
+            IAudioSessionEnumerator sessionEnum = null;
+            try {
+                var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                if (deviceEnum.GetDefaultAudioEndpoint(0, 0, out device) == 0 && device != null) {
+                    Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
+                    object mObj2;
+                    device.Activate(ref iidManager2, 7, IntPtr.Zero, out mObj2);
+                    manager = mObj2 as IAudioSessionManager2;
+                    if (manager != null && manager.GetSessionEnumerator(out sessionEnum) == 0 && sessionEnum != null) {
+                        int count;
+                        sessionEnum.GetCount(out count);
+                        for (int i = 0; i < count; i++) {
+                            IAudioSessionControl control = null;
+                            try {
+                                sessionEnum.GetSession(i, out control);
+                                var control2 = control as IAudioSessionControl2;
+                                if (control2 != null) {
+                                    int pid;
+                                    control2.GetProcessId(out pid);
+                                    if (baseVolumes.ContainsKey(pid)) {
+                                        float vol = baseVolumes[pid];
+                                        float fade = currentFades.ContainsKey(pid) ? currentFades[pid] : 1.0f;
+                                        float boost = globalBoostActive ? boostReductionFactor : 1.0f;
+                                        ISimpleAudioVolume sav = control as ISimpleAudioVolume;
+                                        if (sav != null) {
+                                            sav.SetMasterVolume(vol * fade * boost, Guid.Empty);
+                                        }
+                                    }
+                                }
+                            } finally { if (control != null) Marshal.ReleaseComObject(control); }
+                        }
+                    }
+                }
+            } catch (Exception ex) { Log("Boost Apply Error: " + ex.Message); }
+            finally {
+                if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
+                if (manager != null) Marshal.ReleaseComObject(manager);
+                if (device != null) Marshal.ReleaseComObject(device);
+            }
+
+            if (requestId != null) {
+                lock (stdoutLock) {
+                    Console.WriteLine("{\"status\":\"ok\",\"requestId\":\"" + requestId + "\"}");
+                    Console.Out.Flush();
+                }
+            }
+        }
+
+        static void HandleStartRecording(int pid, string requestId) {
+            lock (activeRecordings) {
+                if (activeRecordings.ContainsKey(pid)) {
+                    activeRecordings[pid].Stop();
+                    activeRecordings.Remove(pid);
+                }
+                var session = new RecordingSession { Pid = pid };
+                activeRecordings[pid] = session;
+                session.Start();
+                Log("Recording started for PID " + pid);
+            }
+            if (requestId != null) {
+                lock (stdoutLock) {
+                    Console.WriteLine("{\"status\":\"ok\",\"requestId\":\"" + requestId + "\"}");
+                    Console.Out.Flush();
+                }
+            }
+        }
+
+        static void HandleStopRecording(int pid, string requestId) {
+            lock (activeRecordings) {
+                if (activeRecordings.ContainsKey(pid)) {
+                    activeRecordings[pid].Stop();
+                    activeRecordings.Remove(pid);
+                    Log("Recording stopped for PID " + pid);
+                }
+            }
+            if (requestId != null) {
+                lock (stdoutLock) {
+                    Console.WriteLine("{\"status\":\"ok\",\"requestId\":\"" + requestId + "\"}");
+                    Console.Out.Flush();
+                }
             }
         }
     }

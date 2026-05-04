@@ -14,6 +14,9 @@ const VALID_SEND_CHANNELS = new Set([
   'set-session-volume',
   'set-master-volume',
   'set-ducking',
+  'set-boost',
+  'start-recording',
+  'stop-recording',
 ]);
 
 const VALID_INVOKE_CHANNELS = new Set([

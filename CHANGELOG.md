@@ -1,5 +1,16 @@
 # Changelog - VolumeFlow
 
+## [1.6.0] - 2026-05-05
+### Added
+- **Per-App Audio Recording**: Możliwość nagrywania dźwięku z konkretnych procesów do plików WAV (WASAPI Loopback).
+- **Smart Overdrive (Boost)**: Inteligentne wzmocnienie głośności Master (Relative Reduction) zapobiegające clippingowi.
+- **Dynamic Tray Icon**: Programowe generowanie ikony tray (brak zależności od plików zewnętrznych).
+- **Auto-Ducking 2.0**: Ulepszona logika wyciszania tła z płynnymi przejściami (fades).
+
+### Fixed
+- **IPC Stability**: Usunięto błędy Unhandled Promise Rejection w procesie głównym Electrona.
+- **Polling Safety**: Dodano sprawdzanie nulli i bezpieczne rzutowanie interfejsów COM w pętli szczytowej (PeakPollingLoop).
+
 ## [1.5.0] - 2026-05-04
 ### Added
 - **Reliability Update**: Kompleksowa stabilizacja komunikacji i zarządzania pamięcią.
