@@ -100,175 +100,130 @@ function startBridge() {
   });
 
   bridgeProcess.stderr.on('data', (data) => {
-    console.error('Bridge stderr:', data);
+    console.error('AudioBridge Error:', data);
   });
 
-  bridgeProcess.on('exit', (code) => {
-    console.log('AudioBridge exited with code:', code);
+  bridgeProcess.on('close', (code) => {
+    console.log(`AudioBridge process exited with code ${code}`);
     bridgeReady = false;
-    bridgeProcess = null;
-    
-    // Auto-restart after 1 second (unless quitting)
     if (!isQuitting) {
-      setTimeout(() => startBridge(), 1000);
+      console.log('Attempting to restart bridge...');
+      setTimeout(startBridge, 2000);
     }
-  });
-
-  bridgeProcess.on('error', (err) => {
-    console.error('Bridge process error:', err);
-    bridgeReady = false;
   });
 }
 
 function sendBridgeCommand(command) {
   return new Promise((resolve, reject) => {
-    if (!bridgeProcess || !bridgeReady || !bridgeProcess.stdin.writable) {
-      return resolve(null);
+    if (!bridgeReady || !bridgeProcess) {
+      return reject(new Error('Bridge not ready'));
     }
 
-    const requestId = String(++requestCounter);
-    const timeoutHandle = setTimeout(() => {
-      pendingRequests.delete(requestId);
-      resolve(null); 
+    const requestId = `req_${++requestCounter}`;
+    const payload = JSON.stringify({ ...command, requestId }) + '\n';
+
+    const timeout = setTimeout(() => {
+      if (pendingRequests.has(requestId)) {
+        pendingRequests.delete(requestId);
+        reject(new Error(`Command timeout: ${command.action}`));
+      }
     }, 5000);
 
-    pendingRequests.set(requestId, { resolve, reject, timeout: timeoutHandle });
-
-    try {
-      bridgeProcess.stdin.write(JSON.stringify({ ...command, requestId }) + '\n');
-    } catch (err) {
-      pendingRequests.delete(requestId);
-      clearTimeout(timeoutHandle);
-      resolve(null);
-    }
+    pendingRequests.set(requestId, { resolve, reject, timeout });
+    bridgeProcess.stdin.write(payload);
   });
 }
 
-function stopBridge() {
-  isQuitting = true;
-  if (bridgeProcess) {
-    try {
-      if (bridgeProcess.stdin.writable) {
-        bridgeProcess.stdin.write('{"action":"exit"}\n');
-      }
-    } catch (e) { }
-    
-    // Fallback kill if bridge doesn't exit gracefully
-    setTimeout(() => {
-      if (bridgeProcess) {
-        try { bridgeProcess.kill(); } catch (e) { }
-        bridgeProcess = null;
-      }
-    }, 800);
-  }
-}
+// ============================================================
+// App Lifecycle
+// ============================================================
 
-// ============================================================
-// Window & Tray
-// ============================================================
+function createTray() {
+  const iconPath = path.join(__dirname, 'icon.png');
+  const icon = nativeImage.createFromPath(iconPath);
+  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+  
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'VolumeFlow v1.5.1', enabled: false },
+    { type: 'separator' },
+    { label: 'Pokaż Mixer', click: () => mainWindow.show() },
+    { label: 'Ustawienia', click: () => {
+      mainWindow.show();
+      // Można dodać event do frontendu żeby otworzył zakładkę ustawień
+    }},
+    { type: 'separator' },
+    { label: 'Zamknij', click: () => {
+      isQuitting = true;
+      app.quit();
+    }}
+  ]);
+
+  tray.setToolTip('VolumeFlow - Premium Audio Mixer');
+  tray.setContextMenu(contextMenu);
+  
+  tray.on('double-click', () => {
+    mainWindow.show();
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 400,
-    height: 600,
+    height: 350,
     frame: false,
     transparent: true,
+    resizable: false,
+    backgroundColor: '#00000000',
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false, // Required for some native APIs like getFileIcon if we want full integration, but safe here
-      preload: path.join(__dirname, 'preload.cjs'),
-      additionalArguments: [`--vf-dev=${isDev}`],
+      devTools: isDev,
     },
-  });
-
-  // Zamiast zamykać okno, chowamy je do tray
-  mainWindow.on('close', (event) => {
-    if (!isQuitting) {
-      event.preventDefault();
-      mainWindow.hide();
-    }
+    show: false,
   });
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
+    // mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
   }
-}
 
-function createTray() {
-  // Programowe tworzenie ikony tray 16x16 (3 paski equalizera)
-  const size = 16;
-  const canvas = Buffer.alloc(size * size * 4); // RGBA
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
 
-  // Rysowanie 3 pasków (kolumn) equalizera w kolorze białym
-  const bars = [
-    { x: 3, h: 8 },   // lewy pasek
-    { x: 7, h: 12 },  // środkowy (najwyższy)
-    { x: 11, h: 6 },  // prawy pasek
-  ];
-
-  for (const bar of bars) {
-    const startY = size - bar.h;
-    for (let y = startY; y < size; y++) {
-      for (let dx = 0; dx < 2; dx++) {
-        const x = bar.x + dx;
-        const idx = (y * size + x) * 4;
-        canvas[idx] = 255;     // R
-        canvas[idx + 1] = 255; // G
-        canvas[idx + 2] = 255; // B
-        canvas[idx + 3] = 220; // A (lekko przezroczysty)
-      }
-    }
-  }
-
-  const icon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
-  tray = new Tray(icon);
-  tray.setToolTip('VolumeFlow - Audio Mixer');
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Pokaż VolumeFlow',
-      click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
-        }
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Zamknij',
-      click: () => {
-        isQuitting = true;
-        stopBridge();
-        if (tray) {
-          tray.destroy();
-          tray = null;
-        }
-        if (mainWindow) {
-          mainWindow.destroy();
-        }
-        app.quit();
-      }
-    }
-  ]);
-
-  tray.setContextMenu(contextMenu);
-
-  // Kliknięcie na ikonkę tray przywraca okno
-  tray.on('click', () => {
-    if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.hide();
-      } else {
-        mainWindow.show();
-        mainWindow.focus();
-      }
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
     }
   });
 }
+
+app.whenReady().then(() => {
+  createWindow();
+  createTray();
+  startBridge();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    // We keep app running in tray by default
+  }
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+  if (bridgeProcess) {
+    bridgeProcess.kill();
+  }
+});
 
 // ============================================================
 // IPC Handlers
@@ -276,27 +231,57 @@ function createTray() {
 
 ipcMain.on('close-app', () => {
   isQuitting = true;
-  stopBridge();
-  if (tray) {
-    tray.destroy();
-    tray = null;
-  }
-  if (mainWindow) {
-    mainWindow.destroy();
-  }
   app.quit();
 });
 
 ipcMain.on('minimize-to-tray', () => {
-  if (mainWindow) {
-    mainWindow.hide();
+  if (mainWindow) mainWindow.hide();
+});
+
+ipcMain.on('toggle-session-mute', (event, { id }) => {
+  sendBridgeCommand({ action: 'toggle_mute', pid: parseInt(id) });
+});
+
+ipcMain.on('set-session-volume', (event, { id, volume }) => {
+  sendBridgeCommand({ action: 'set_volume', pid: parseInt(id), volume });
+});
+
+ipcMain.on('set-master-volume', (event, { volume }) => {
+  sendBridgeCommand({ action: 'set_master_volume', volume });
+});
+
+ipcMain.handle('get-audio-sessions', async () => {
+  const result = await sendBridgeCommand({ action: 'get_sessions' });
+  return result ? result.sessions : [];
+});
+
+ipcMain.handle('get-master-info', async () => {
+  const result = await sendBridgeCommand({ action: 'get_master' });
+  if (result && result.master) {
+    return { ...result.master, id: 'master' };
+  }
+  return null;
+});
+
+ipcMain.handle('apply-profile', async (event, profile) => {
+  if (!profile || !profile.sessions) return;
+  
+  // Apply Master
+  await sendBridgeCommand({ action: 'set_master_volume', volume: profile.masterVolume / 100 });
+
+  // Apply sessions with a small delay between them to prevent bridge congestion
+  for (const session of profile.sessions) {
+    const result = await sendBridgeCommand({ action: 'get_sessions' });
+    const live = result.sessions.find(s => s.name === session.name);
+    if (live) {
+      await sendBridgeCommand({ action: 'set_volume', pid: live.pid, volume: session.volume });
+    }
   }
 });
 
 ipcMain.handle('get-app-icon', async (event, filePath) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return null;
-    
     // Wrap with timeout to prevent hanging on slow/network drives
     return await Promise.race([
       app.getFileIcon(filePath, { size: 'normal' }).then(icon => icon.toDataURL()),
@@ -317,14 +302,21 @@ ipcMain.on('set-window-size', (event, { width, height }) => {
     win.center();
   }
 });
+
 ipcMain.on('set-ducking', (event, data) => {
-  if (bridgeProcess && !bridgeProcess.killed) {
-    const cmd = JSON.stringify({
-      action: 'set_ducking',
-      ...data
-    });
-    bridgeProcess.stdin.write(cmd + '\n');
-  }
+  sendBridgeCommand({ action: 'set_ducking', ...data });
+});
+
+ipcMain.on('set-boost', (event, data) => {
+  sendBridgeCommand({ action: 'set_boost', ...data });
+});
+
+ipcMain.on('start-recording', (event, { pid }) => {
+  sendBridgeCommand({ action: 'start_recording', pid });
+});
+
+ipcMain.on('stop-recording', (event, { pid }) => {
+  sendBridgeCommand({ action: 'stop_recording', pid });
 });
 
 // Settings persistence
@@ -399,106 +391,3 @@ async function fadeToVolume(pid, targetVolume, duration = 800) {
     activeFades.delete(pid);
   }
 }
-
-ipcMain.handle('apply-profile', async (event, profile) => {
-  if (!profile || !profile.sessions || isQuitting) return false;
-  
-  const result = await sendBridgeCommand({ action: 'get_sessions' });
-  if (!result || !result.sessions) return false;
-
-  // Start all fades in parallel but wait for them
-  const fadePromises = profile.sessions.map(target => {
-    const live = result.sessions.find(s => s.name.toLowerCase() === target.name.toLowerCase());
-    if (live) {
-      return fadeToVolume(live.pid, target.volume);
-    }
-    return Promise.resolve();
-  });
-
-  Promise.all(fadePromises).catch(e => console.error('Fade error:', e));
-
-  // Apply master
-  if (profile.masterVolume !== undefined) {
-    const vol = Math.min(1.0, Math.max(0.0, profile.masterVolume / 100));
-    await sendBridgeCommand({ action: 'set_master_volume', volume: vol });
-  }
-
-  return true;
-});
-
-
-// ============================================================
-// Audio IPC - now via AudioBridge
-// ============================================================
-
-ipcMain.handle('get-audio-sessions', async () => {
-  const result = await sendBridgeCommand({ action: 'get_sessions' });
-  if (!result || !result.sessions) return [];
-  
-  return result.sessions.map(s => ({
-    pid: s.pid,
-    name: s.name || 'Unknown',
-    path: s.path || '',
-    volume: s.volume,  // Already 0.0 - 1.0 from bridge
-    muted: s.muted,
-    id: String(s.pid)  // Use PID as identifier for bridge commands
-  }));
-});
-
-ipcMain.on('toggle-session-mute', async (event, { id }) => {
-  if (!id) return;
-  const pid = parseInt(id);
-  if (isNaN(pid)) return;
-  await sendBridgeCommand({ action: 'toggle_mute', pid: pid });
-});
-
-ipcMain.on('set-session-volume', async (event, { id, volume }) => {
-  if (!id) return;
-  const pid = parseInt(id);
-  if (isNaN(pid)) return;
-  const vol = Math.min(1.0, Math.max(0.0, volume));
-  await sendBridgeCommand({ action: 'set_volume', pid: pid, volume: vol });
-});
-
-ipcMain.handle('get-master-info', async () => {
-  const result = await sendBridgeCommand({ action: 'get_master' });
-  if (!result || !result.master) return { volume: 0.5, muted: false, id: '' };
-  
-  return {
-    volume: result.master.volume, // Raw 0-1 for consistent internal API
-    muted: result.master.muted,
-    id: 'master'
-  };
-});
-
-ipcMain.on('set-master-volume', async (event, { id, volume }) => {
-  const vol = Math.min(1.0, Math.max(0.0, volume)); // Now expects 0-1
-  await sendBridgeCommand({ action: 'set_master_volume', volume: vol });
-});
-
-// ============================================================
-// App Lifecycle
-// ============================================================
-
-app.whenReady().then(() => {
-  startBridge();
-  createWindow();
-  createTray();
-
-  app.on('activate', () => {
-    if (mainWindow) {
-      mainWindow.show();
-    } else {
-      createWindow();
-    }
-  });
-});
-
-app.on('before-quit', () => {
-  isQuitting = true;
-  stopBridge();
-});
-
-app.on('window-all-closed', () => {
-  // Nie zamykamy, bo aplikacja działa w tray
-});
