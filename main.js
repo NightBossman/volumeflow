@@ -178,6 +178,7 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false, // Required for some native APIs like getFileIcon if we want full integration, but safe here
       preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: [`--vf-dev=${isDev}`],
     },
   });
 
