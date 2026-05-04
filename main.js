@@ -213,6 +213,8 @@ function createTray() {
   tray.setToolTip('VolumeFlow - Audio Mixer');
 
   const contextMenu = Menu.buildFromTemplate([
+    { label: 'VolumeFlow v1.6.0', enabled: false },
+    { type: 'separator' },
     {
       label: 'Pokaż VolumeFlow',
       click: () => {

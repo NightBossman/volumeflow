@@ -384,7 +384,7 @@ namespace VolumeFlow
 
         static void Main(string[] args)
         {
-            Log("Bridge starting (V1.5.1 - Auto-Duck Support)...");
+            Log("Bridge starting (V1.6.0 - Recording & Boost Support)...");
             Console.OutputEncoding = Encoding.UTF8;
             Console.InputEncoding = Encoding.UTF8;
 
@@ -495,7 +495,7 @@ namespace VolumeFlow
 
         static void PeakPollingLoop()
         {
-            Log("Peak thread started (V1.5.1)");
+            Log("Peak thread started (V1.6.0)");
             string lastDeviceId = null;
             IMMDevice bestDevice = null;
             IAudioSessionManager2 bestManager = null;
