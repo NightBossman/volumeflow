@@ -15,7 +15,7 @@
     Info,
     Heart,
     Power
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   const { ipcRenderer } = window.electron;
 
@@ -45,7 +45,6 @@
     try {
       const liveProcesses = await ipcRenderer.invoke('get-audio-sessions');
       if (liveProcesses) {
-        // Normalize volume from 0.0-1.0 (bridge) to 0-100 (UI percent)
         processes = liveProcesses.map(p => ({ ...p, volume: Math.round(p.volume * 100) }));
       }
 
@@ -122,7 +121,6 @@
   }
 
   function handleVolumeChange(id, volume) {
-    // volume is in 0-100 range from slider, send as 0.0-1.0 to bridge
     ipcRenderer.send('set-session-volume', { id, volume: volume / 100 });
   }
 
@@ -185,13 +183,15 @@
       }
     }
     
-    ipcRenderer.on('audio-peaks', handlePeaks);
+    // on() returns an unsubscribe closure — no removeListener matching needed
+    const unsubPeaks = ipcRenderer.on('audio-peaks', handlePeaks);
 
     pollSessions();
     ipcRenderer.send('set-window-size', { width: 400, height: 600 });
     
     return () => {
       isRunning = false;
+      if (typeof unsubPeaks === 'function') unsubPeaks();
     };
   });
 </script>
@@ -321,7 +321,7 @@
             <div class="about-card">
               <div class="about-header">
                 <Activity size={24} color="var(--primary-color)" />
-                <h3>VolumeFlow v1.5.0</h3>
+                <h3>VolumeFlow v1.0.0</h3>
               </div>
               <p>Premium Windows Audio Mixer stworzony z myślą o estetyce i wydajności.</p>
               <div class="stats">
@@ -331,7 +331,7 @@
                 </div>
                 <div class="stat-item">
                   <span class="stat-label">Status:</span>
-                  <span class="stat-val">Stabilny (v1.5.0)</span>
+                  <span class="stat-val">Stabilny (v1.0.0)</span>
                 </div>
               </div>
               <div class="about-footer">
