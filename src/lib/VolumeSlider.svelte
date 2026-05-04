@@ -1,13 +1,17 @@
 <script>
-  import { Volume2, VolumeX, AppWindow } from '@lucide/svelte';
+  import { Volume2, VolumeX, AppWindow, Mic, MicOff, Zap } from '@lucide/svelte';
   let { 
     value = $bindable(50), 
     label = "Aplikacja", 
     isMaster = false, 
     muted = false,
+    isRecording = false,
+    isBoost = false,
     peak = 0,
     onchange,
     onmute,
+    onrecord,
+    onboost,
     icon
   } = $props();
 
@@ -39,7 +43,31 @@
       </button>
       <span class="label">{label}</span>
     </div>
-    <span class="value" class:overdrive={isOverdrive}>{muted ? 'Muted' : value + '%'}</span>
+    <div class="actions-group">
+      {#if !isMaster}
+        <button 
+          class="rec-btn" 
+          class:recording={isRecording} 
+          onclick={() => onrecord && onrecord()} 
+          title={isRecording ? "Zatrzymaj nagrywanie" : "Nagrywaj aplikację"}
+        >
+          <Mic size={14} color={isRecording ? "#ff4444" : "rgba(255,255,255,0.4)"} />
+          {#if isRecording}<span class="rec-dot"></span>{/if}
+        </button>
+      {/if}
+      {#if isMaster}
+        <button 
+          class="boost-btn" 
+          class:active={isBoost} 
+          onclick={() => onboost && onboost()} 
+          title={isBoost ? "Wyłącz Smart Overdrive" : "Włącz Smart Overdrive"}
+        >
+          <Zap size={14} color={isBoost ? "#ff9900" : "rgba(255,255,255,0.4)"} />
+          {#if isBoost}<span class="boost-label">BOOST</span>{/if}
+        </button>
+      {/if}
+      <span class="value" class:overdrive={isOverdrive}>{muted ? 'Muted' : value + '%'}</span>
+    </div>
   </div>
   
   <div class="input-wrapper">
@@ -107,6 +135,78 @@
   .label {
     color: rgba(255, 255, 255, 0.8);
     font-weight: 500;
+  }
+
+  .actions-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .rec-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.2s;
+    position: relative;
+  }
+
+  .rec-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .rec-btn.recording {
+    background: rgba(255, 68, 68, 0.15);
+    border-color: rgba(255, 68, 68, 0.4);
+    box-shadow: 0 0 10px rgba(255, 68, 68, 0.2);
+  }
+
+  .boost-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.2s;
+  }
+
+  .boost-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .boost-btn.active {
+    background: rgba(255, 153, 0, 0.15);
+    border-color: rgba(255, 153, 0, 0.4);
+    box-shadow: 0 0 10px rgba(255, 153, 0, 0.2);
+  }
+
+  .boost-label {
+    font-size: 0.7em;
+    font-weight: 800;
+    color: #ff9900;
+    letter-spacing: 0.5px;
+  }
+
+  .rec-dot {
+    width: 6px;
+    height: 6px;
+    background: #ff4444;
+    border-radius: 50%;
+    animation: pulse 1.5s infinite;
+  }
+
+  @keyframes pulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.5); opacity: 0.5; }
+    100% { transform: scale(1); opacity: 1; }
   }
 
   .value {

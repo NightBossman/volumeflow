@@ -41,6 +41,25 @@
   let profiles = $state([]); // { id, name, sessions: [{ name, volume }], masterVolume }
   let iconCache = $state(new Map());
 
+  // Recording & Boost States
+  let recordingPids = $state(new Set());
+  let isBoostActive = $state(false);
+
+  function toggleRecording(pid) {
+    if (recordingPids.has(pid)) {
+      recordingPids.delete(pid);
+      ipcRenderer.send('stop-recording', { pid });
+    } else {
+      recordingPids.add(pid);
+      ipcRenderer.send('start-recording', { pid });
+    }
+  }
+
+  function toggleBoost() {
+    isBoostActive = !isBoostActive;
+    ipcRenderer.send('set-boost', { active: isBoostActive });
+  }
+
   const themes = [
     { id: 'midnight', name: 'Midnight', color: '#0078d4' },
     { id: 'solar', name: 'Solar', color: '#ff4d00' },
@@ -58,14 +77,26 @@
 
       for (const process of processes) {
         if (process.path && !iconCache.has(process.path)) {
-          iconCache.set(process.path, 'loading');
-          ipcRenderer.invoke('get-app-icon', process.path).then(icon => {
-            iconCache.set(process.path, icon);
+          iconCache.set(process.path, 'loading'); 
+          ipcRenderer.invoke('get-app-icon', process.path).then(iconData => {
+            if (iconData) {
+              iconCache.set(process.path, iconData);
+              processes = [...processes];
+            } else {
+              iconCache.set(process.path, null);
+            }
           });
         }
       }
+
+      const info = await ipcRenderer.invoke('get-master-info');
+      if (info) {
+        masterVolume = Math.round(info.volume * 100);
+        masterMuted = info.muted;
+        masterId = info.id;
+      }
     } catch (e) {
-      console.error('Failed to load sessions:', e);
+      console.error(e);
     }
   }
 
@@ -247,6 +278,8 @@
         isMaster={true} 
         muted={masterMuted}
         peak={masterPeak}
+        isBoost={isBoostActive}
+        onboost={toggleBoost}
         onchange={handleMasterChange}
         onmute={() => handleMute(masterId)}
       />
@@ -265,6 +298,8 @@
           bind:value={process.volume} 
           muted={process.muted}
           peak={peaks[process.pid] || 0}
+          isRecording={recordingPids.has(process.pid)}
+          onrecord={() => toggleRecording(process.pid)}
           onchange={() => handleVolumeChange(process.id, process.volume)}
           onmute={() => handleMute(process.id)}
         >
