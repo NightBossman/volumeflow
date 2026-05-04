@@ -1,7 +1,7 @@
 <script>
   import './app.css';
   import VolumeSlider from './lib/VolumeSlider.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { 
     X, 
     Maximize2, 
@@ -17,7 +17,7 @@
     Power
   } from 'lucide-svelte';
 
-  const { ipcRenderer } = window.require('electron');
+  const { ipcRenderer } = window.electron;
 
   let isExpanded = $state(false);
   let showAbout = $state(false);
@@ -45,6 +45,7 @@
     try {
       const liveProcesses = await ipcRenderer.invoke('get-audio-sessions');
       if (liveProcesses) {
+        // Normalize volume from 0.0-1.0 (bridge) to 0-100 (UI percent)
         processes = liveProcesses.map(p => ({ ...p, volume: Math.round(p.volume * 100) }));
       }
 
@@ -62,11 +63,11 @@
         }
       }
 
-      const master = await ipcRenderer.invoke('get-master-info');
-      if (master) {
-        masterVolume = Math.round(master.volume);
-        masterMuted = master.muted;
-        masterId = master.id;
+      const info = await ipcRenderer.invoke('get-master-info');
+      if (info) {
+        masterVolume = Math.round(info.volume * 100);
+        masterMuted = info.muted;
+        masterId = info.id;
       }
     } catch (e) {
       console.error(e);
@@ -121,11 +122,12 @@
   }
 
   function handleVolumeChange(id, volume) {
+    // volume is in 0-100 range from slider, send as 0.0-1.0 to bridge
     ipcRenderer.send('set-session-volume', { id, volume: volume / 100 });
   }
 
-  function handleMasterChange(volume) {
-    ipcRenderer.send('set-master-volume', { id: masterId, volume });
+  function handleMasterChange() {
+    ipcRenderer.send('set-master-volume', { id: 'master', volume: masterVolume / 100 });
   }
 
   function handleMute(id) {
@@ -139,6 +141,14 @@
 
   function closeApp() {
     ipcRenderer.send('close-app');
+  }
+
+  function handlePeaks(data) {
+    if (!data) return;
+    masterPeak = data.master || 0;
+    if (data.sessions) {
+      peaks = data.sessions;
+    }
   }
 
   onMount(async () => {
@@ -175,13 +185,10 @@
       }
     }
     
-    ipcRenderer.on('audio-peaks', (event, data) => {
-      peaks = data.sessions || {};
-      masterPeak = data.master || 0;
-    });
+    ipcRenderer.on('audio-peaks', handlePeaks);
 
     pollSessions();
-    ipcRenderer.send('set-window-size', { width: 400, height: 350 });
+    ipcRenderer.send('set-window-size', { width: 400, height: 600 });
     
     return () => {
       isRunning = false;
@@ -220,7 +227,7 @@
         isMaster={true} 
         muted={masterMuted}
         peak={masterPeak}
-        onchange={() => handleMasterChange(masterVolume)}
+        onchange={handleMasterChange}
         onmute={() => handleMute(masterId)}
       />
     </section>
@@ -314,7 +321,7 @@
             <div class="about-card">
               <div class="about-header">
                 <Activity size={24} color="var(--primary-color)" />
-                <h3>VolumeFlow v1.1.0</h3>
+                <h3>VolumeFlow v1.5.0</h3>
               </div>
               <p>Premium Windows Audio Mixer stworzony z myślą o estetyce i wydajności.</p>
               <div class="stats">
@@ -324,7 +331,7 @@
                 </div>
                 <div class="stat-item">
                   <span class="stat-label">Status:</span>
-                  <span class="stat-val">Stabilny (v1.1.0)</span>
+                  <span class="stat-val">Stabilny (v1.5.0)</span>
                 </div>
               </div>
               <div class="about-footer">
