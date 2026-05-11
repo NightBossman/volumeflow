@@ -1,47 +1,39 @@
-# 🌊 VolumeFlow
-**Nowoczesny Mikser Audio dla Windows z Ekosystemem Przyszłości**
+# VolumeFlow - Premium Audio Control
 
-VolumeFlow to lekka, wydajna i estetyczna aplikacja do zarządzania głośnością procesów v systemie Windows. Zbudowana v oparciu o Svelte, Electron oraz dedykowany mostek v C#, oferuje płynność działania nieosiągalną dla systemowego miksera.
+VolumeFlow to zaawansowany mikser dźwięku dla systemu Windows, oferujący precyzyjną kontrolę, wizualizację w czasie rzeczywistym oraz unikalne funkcje automatyzacji.
 
-![Status](https://img.shields.io/badge/Status-Alpha--Pre--Release-orange)
-![Platform](https://img.shields.io/badge/Platform-Windows-blue)
+![VolumeFlow UI](assets/screenshot.png)
 
-## 🚀 Kluczowe Funkcje (V1.0)
+## 🚀 Główne Funkcje (v1.7.0)
 
-- **Persistent Audio Bridge (Tryb Pro):** Dedykowany mostek `AudioBridge.exe` v C# wykorzystujący natywne API COM. Eliminuje migotanie kursora i zapewnia natychmiastową reakcję suwaków.
-- **Premium Glass UI:** Interfejs oparty na estetyce Glassmorphism (Acrylic/Mica) z płynnymi animacjami.
-- **System Tray:** Aplikacja działa v tle, minimalizuje się do zasobnika systemowego i pozwala na błyskawiczne przywołanie okna.
-- **System Motywów:** 4 starannie dobrane palety (Midnight, Solar, Matrix, Frost) oraz tryb **Eye Saver**.
-- **Native Icons:** Automatyczne pobieranie rzeczywistych ikon z plików `.exe` aktywnych procesów.
+- **Vibrant Audio Visualizers**: Płynne mierniki szczytowe (peak meters) dla każdego procesu.
+- **Smart Overdrive**: Bezpieczne podbijanie głośności ponad standardowe 100%.
+- **Audio Recording**: Nagrywanie dźwięku z konkretnych aplikacji bez przechwytywania całego systemu.
+- **Auto-Ducking**: Automatyczne ściszanie muzyki/tła, gdy wybrana aplikacja (np. komunikator) emituje dźwięk.
+- **OSD Notifications**: Powiadomienia na ekranie o stanie aplikacji.
+- **Instant Search**: Szybkie filtrowanie procesów audio.
+- **Modern UI**: Interfejs oparty na efektach szklanego połysku (glassmorphism).
 
 ## 🛠 Technologia
 
-- **Frontend:** Svelte + Vite
-- **Shell:** Electron
-- **Backend Audio:** C# (Core Audio API / COM Interop)
-- **Komunikacja:** Strumieniowy mostek JSON (stdin/stdout)
+- **Frontend**: Svelte + Vite (Premium UI Design)
+- **Backend**: C# (WASAPI / Core Audio API)
+- **Runtime**: Electron
+- **Inter-Process**: JSON-based Stdin/Stdout Stream with Backpressure Management
 
-## 📦 Instalacja (Development)
+## 📦 Instalacja i Uruchomienie
 
-1. Sklonuj repozytorium:
-   ```bash
-   git clone https://github.com/NightBossman/volumeflow.git
-   ```
-2. Zainstaluj zależności:
-   ```bash
-   npm install
-   ```
-3. Uruchom v trybie deweloperskim:
-   ```bash
-   npm run dev
-   ```
+1. Sklonuj repozytorium.
+2. Zainstaluj zależności: `npm install`
+3. Uruchom w trybie deweloperskim: `npm run start`
 
-## 🛤 Plany Rozwoju (Roadmap)
+## 🗺 Roadmap
 
-- [ ] **Tryb Scen (Profile):** Zapisywanie i wczytywanie presetów głośności.
-- [ ] **Grupowanie Procesów:** Łączenie wielu aplikacji pod jeden suwak.
-- [ ] **Visualizer:** Pulsujące paski głośności (Audio Peaks).
-- [ ] **Mobile Remote:** Sterowanie głośnością PC z telefonu (Android/iOS).
+- [x] v1.7.0: OSD, Search, Health Monitoring, AudioBridge Hardening
+- [ ] v1.8.0: Global Hotkeys (Ctrl+Shift+R dla nagrywania)
+- [ ] v1.9.0: Mini-Player Mode & Compact View
+- [ ] v2.0.0: Profile Audio & Cloud Sync
 
----
-*Created with ❤️ by NightBossman & Antigravity AI*
+## 📄 Licencja
+
+MIT - Zobacz plik [LICENSE](LICENSE) po więcej szczegółów.

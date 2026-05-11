@@ -1,74 +1,33 @@
 # Changelog - VolumeFlow
 
-## [1.6.0] - 2026-05-05
-### Added
-- **Per-App Audio Recording**: Możliwość nagrywania dźwięku z konkretnych procesów do plików WAV (WASAPI Loopback).
-- **Smart Overdrive (Boost)**: Inteligentne wzmocnienie głośności Master (Relative Reduction) zapobiegające clippingowi.
-- **Dynamic Tray Icon**: Programowe generowanie ikony tray (brak zależności od plików zewnętrznych).
-- **Auto-Ducking 2.0**: Ulepszona logika wyciszania tła z płynnymi przejściami (fades).
-- **UI/UX Performance Optimization**: Wdrożenie warstwy nakładki (overlay) dla Eye Saver zamiast ciężkich filtrów CSS.
-- **Improved Drag & Interaction**: Dodanie `no-drag` do wszystkich interaktywnych elementów UI (suwaki, przyciski).
-- **Startup Validation**: Weryfikacja obecności elementu root (#app) przed inicjalizacją frontendu.
+Wszystkie istotne zmiany w tym projekcie będą dokumentowane w tym pliku.
 
-### Fixed
-- **IPC Stability**: Usunięto błędy Unhandled Promise Rejection w procesie głównym Electrona.
-- **Polling Safety**: Dodano sprawdzanie nulli i bezpieczne rzutowanie interfejsów COM w pętli szczytowej (PeakPollingLoop).
+## [1.7.0] - 2026-05-11
+### Dodano
+- **System OSD (On-Screen Display)**: Nowoczesne powiadomienia w rogu ekranu informujące o rozpoczęciu i zakończeniu nagrywania.
+- **Procesy Search**: Dynamiczna wyszukiwarka w czasie rzeczywistym pozwalająca na błyskawiczne odnalezienie konkretnej aplikacji w mikserze.
+- **Health Monitoring**: Automatyczne monitorowanie wydajności mostka audio (dropped peaks) z logowaniem ostrzeżeń w konsoli.
+- **AudioBridge V1.8.0**: Gruntowna przebudowa backendu (audyt bezpieczeństwa COM, obsługa backpressure, event-driven recording).
 
-## [1.5.0] - 2026-05-04
-### Added
-- **Reliability Update**: Kompleksowa stabilizacja komunikacji i zarządzania pamięcią.
-- **IPC Protocol V2**: Wprowadzenie `requestId` dla asynchronicznego routingu żądań – eliminuje błędy kolejkowania.
-- **Context Bridge Security**: Pełna migracja na `contextIsolation: true` i `contextBridge` w Electronie.
-- **Auto-Cleanup**: Automatyczne zamykanie mostka przy wyjściu z aplikacji (`isQuitting` flag).
+### Ulepszono
+- **Audio Logic**: Poprawiony mechanizm synchronizacji wolumenu przy włączonym Smart Overdrive.
+- **UI Performance**: Optymalizacja list procesów przy dużej liczbie aktywnych sesji audio.
+- **UX**: Dodano powiadomienie OSD przy zatrzymaniu nagrywania.
 
-### Fixed
-- **COM Resource Leaks**: Gwarantowane zwalnianie obiektów COM w pętli `PeakPollingLoop` (eliminacja crashy przy zmianie urządzeń).
-- **Process Handle Leaks**: Bezpieczne zamykanie uchwytów procesów Windows dzięki `using`.
-- **Fading Glitches**: Naprawiono nakładanie się animacji głośności (asynchroniczny fade z anulowaniem).
-- **Preload Best Practices**: Zastosowano poprawki sugerowane przez Codex (once: true, dev-only logging).
+### Naprawiono
+- Krytyczny błąd blokowania potoku stdout przy dużym natężeniu danych peak.
+- Wycieki pamięci związane z nieprawidłowym zwalnianiem obiektów COM w backendzie C#.
+- Problem z pustym folderem nagrań (poprawiona ścieżka zapisu i finalizacja nagłówka WAV).
 
-## [1.1.0] - 2026-05-04
-### Added
-- **Stability Overhaul**: Całkowita przebudowa backendu AudioBridge.cs (V1.4.0).
-- **Dynamic Device Tracking**: Mostek teraz automatycznie przełącza się między urządzeniami audio w czasie rzeczywistym.
-- **Multithreaded Sync**: Wprowadzono blokady (stdoutLock) zapobiegające mieszaniu się danych JSON na strumieniu wyjściowym.
-- **Improved JSON Parser**: Przejście na `JavaScriptSerializer` po stronie backendu – koniec z błędami parsowania tekstowego.
+---
+## [1.6.0] - 2026-05-04
+### Dodano
+- **Smart Overdrive (Boost)**: Inteligentna kompresja dynamiczna pozwalająca na podbicie głośności bez przesterowań.
+- **Recording Engine**: Możliwość nagrywania dźwięku bezpośrednio z wybranych procesów do plików .wav.
+- **Integracja systemowa**: Dodanie przycisku otwierającego folder z nagraniami.
 
-### Fixed
-- **Memory Leaks**: Usunięto wycieki obiektów COM poprzez jawne zwalnianie wskaźników RCW.
-- **Session Mismatch**: Naprawiono błędy GUID-ów sesji, co przywróciło działanie kontroli głośności procesów.
-- **Missing Sessions**: Usunięto agresywny filtr pików – teraz sesje, które są chwilowo ciche, nie znikają z interfejsu.
-- **SetVolume Implementation**: W pełni działająca funkcja ustawiania głośności dla poszczególnych procesów.
-
-## [1.0.0] - 2026-04-27
-### Added
-- **Final V1.0 Release**: Pełna wersja z Trybem Scen i Autostartem.
-- **AudioBridge.exe**: Wprowadzenie natywnego mostka audio w C# (Core Audio API).
-- **Persistent Connection**: Electron utrzymuje stałe połączenie z mostkiem przez stdin/stdout.
-- **JSON Protocol**: Nowy, szybki protokół komunikacji między procesami.
-- **New Theme**: Dodano 5. motyw kolorystyczny: **Cyberpunk 2077**.
-- **UI Polish**: Zmniejszono przeźroczystość tła i ulepszono izolację Eye Saver (nagłówek bez filtra).
-
-### Fixed
-- **Cursor Flickering**: Wyeliminowano problem migającego kursora systemowego przy odświeżaniu danych.
-- **Process Spam**: Wyeliminowano ciągłe uruchamianie i zamykanie podprocesów w Menedżerze Zadań.
-- **Parsing Errors**: Usunięto błędy "Error 32" i problemy z niekompletnym JSONem dzięki buforowaniu strumienia.
-
-## [Alpha 0.5] - 2026-04-26
-### Added
-- **System Tray**: Obsługa ikony w zasobniku systemowym.
-- **Native Icons**: Pobieranie ikon `.exe` za pomocą `app.getFileIcon`.
-- **Settings Persistence**: Zapisywanie motywu i trybu Eye Saver do `config.json`.
-
-### Fixed
-- **Tray Exit**: Naprawiono problem z brakiem reakcji na przycisk zamknięcia przy schowanej aplikacji.
-
-## [Alpha 0.4] - 2026-04-25
-### Added
-- **Dual-Mode UI**: Tryb kompaktowy i rozszerzony.
-- **Theme System**: 4 motywy kolorystyczne (Midnight, Solar, Matrix, Frost).
-- **Eye Saver**: Filtr światła niebieskiego.
-
-## [Alpha 0.1] - 2026-04-20
-- Inicjalizacja projektu (Vite + Svelte + Electron).
-- Podstawowa kontrola głośności przez SoundVolumeView CLI.
+---
+## [1.5.1] - 2026-05-03
+### Naprawiono
+- Poprawki stabilności Auto-Ducking w środowiskach wielomonitorowych.
+- Hardening komunikacji IPC między Electronem a AudioBridge.

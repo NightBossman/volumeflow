@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700&display=swap');
+        
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: transparent;
+            font-family: 'Outfit', sans-serif;
+            color: white;
+            display: flex;
+            justify-content: flex-end;
+            align-items: flex-end;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .osd-container {
+            background: rgba(10, 10, 15, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px 24px;
+            margin: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .osd-container.visible {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 120, 212, 0.2);
+            border-radius: 8px;
+            color: #0078d4;
+        }
+
+        .content {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .title {
+            font-size: 0.7em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.5;
+            font-weight: 700;
+        }
+
+        .message {
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        .progress-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: #0078d4;
+            width: 100%;
+            transition: width 3s linear;
+        }
+    </style>
+</head>
+<body>
+    <div id="osd" class="osd-container">
+        <div class="icon" id="osd-icon">
+            <svg xmlns="http://www.w3.org/2001/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-6M9 20v-10M6 20v-4M15 20v-13M18 20v-16"/></svg>
+        </div>
+        <div class="content">
+            <div class="title" id="osd-title">VolumeFlow</div>
+            <div class="message" id="osd-message">Powiadomienie</div>
+        </div>
+        <div class="progress-bar" id="osd-progress"></div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        ipcRenderer.on('show-osd', (event, { message, icon }) => {
+            document.getElementById('osd-title').innerText = 'VolumeFlow';
+            document.getElementById('osd-message').innerText = message;
+            
+            // Set icon if provided
+            const iconSvg = icon === 'stop' 
+                ? '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>'
+                : '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>';
+            document.getElementById('osd-icon').innerHTML = iconSvg;
+            
+            const container = document.getElementById('osd');
+            const progress = document.getElementById('osd-progress');
+            
+            // Reset progress
+            progress.style.transition = 'none';
+            progress.style.width = '100%';
+            
+            container.classList.add('visible');
+            
+            setTimeout(() => {
+                progress.style.transition = 'width 3s linear';
+                progress.style.width = '0%';
+            }, 10);
+
+            // Auto-hide after 3 seconds
+            setTimeout(() => {
+                container.classList.remove('visible');
+            }, 3000);
+        });
+
+        ipcRenderer.on('hide-osd', () => {
+            document.getElementById('osd').classList.remove('visible');
+        });
+    </script>
+</body>
+</html>

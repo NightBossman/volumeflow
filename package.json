@@ -1,41 +1,21 @@
 {
   "name": "volumeflow",
-  "version": "1.6.0",
-  "description": "Premium Windows Audio Mixer",
+  "version": "1.7.0",
+  "description": "Premium Windows Audio Control & Monitoring",
   "main": "main.js",
-  "type": "module",
   "scripts": {
-    "dev": "concurrently \"vite\" \"cross-env NODE_ENV=development electron .\"",
-    "build": "vite build && electron-builder",
-    "preview": "vite preview"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "electron ."
   },
   "keywords": [],
-  "author": "Antigravity",
+  "author": "VolumeFlow Team",
   "license": "MIT",
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^4.0.0",
-    "concurrently": "^8.2.2",
-    "cross-env": "^7.0.3",
-    "electron": "^41.0.0",
-    "electron-builder": "^24.13.3",
-    "svelte": "^5.0.0",
-    "vite": "^8.0.10"
-  },
-  "dependencies": {
-    "@lucide/svelte": "^0.479.0"
-  },
-  "build": {
-    "appId": "com.antigravity.volumeflow",
-    "files": [
-      "dist/**/*",
-      "main.js",
-      "preload.cjs",
-      "AudioBridge.exe",
-      "package.json"
-    ],
-    "win": {
-      "target": "portable",
-      "icon": "public/icon.ico"
-    }
+    "@sveltejs/vite-plugin-svelte": "^2.4.2",
+    "electron": "^25.3.0",
+    "svelte": "^4.0.5",
+    "vite": "^4.4.4"
   }
 }
