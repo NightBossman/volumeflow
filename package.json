@@ -2,7 +2,7 @@
   "name": "volumeflow",
   "version": "1.7.0",
   "description": "Premium Windows Audio Control & Monitoring",
-  "main": "src/main.js",
+  "main": "main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

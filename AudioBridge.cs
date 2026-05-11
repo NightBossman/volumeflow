@@ -570,7 +570,7 @@ namespace VolumeFlow
                     fs.Write(new byte[headerSize], 0, headerSize);
 
                     uint totalBytes = 0;
-                    int initialBufferBytes = (int)(bufferSize * fmt.nBlockAlign);
+                    int initialBufferBytes = (int)(bufferSize * fmtEx.nBlockAlign);
                     if (initialBufferBytes <= 0) initialBufferBytes = 8192;
                     byte[] buffer = new byte[initialBufferBytes];
 
@@ -583,8 +583,8 @@ namespace VolumeFlow
 
                     Log("Recording (PID " + Pid + ") started; mode=" + (useEvents ? "event-driven" : "timer-driven")
                         + ", isExtensible=" + isExtensible + ", isFloat=" + isFloat
-                        + ", channels=" + fmt.nChannels + ", sampleRate=" + fmt.nSamplesPerSec
-                        + ", bits=" + fmt.wBitsPerSample);
+                        + ", channels=" + fmtEx.nChannels + ", sampleRate=" + fmtEx.nSamplesPerSec
+                        + ", bits=" + fmtEx.wBitsPerSample);
 
                     // 6. Pętla capture
                     while (running) {
@@ -609,7 +609,7 @@ namespace VolumeFlow
                             if (gbHr < 0) break;
 
                             if (numFramesRead > 0) {
-                                int bytesRead = (int)(numFramesRead * fmt.nBlockAlign);
+                                int bytesRead = (int)(numFramesRead * fmtEx.nBlockAlign);
                                 if (buffer.Length < bytesRead) buffer = new byte[bytesRead];
                                 if ((flags & 0x2) != 0) {
                                     // AUDCLNT_BUFFERFLAGS_SILENT — zapisz ciszę
@@ -635,7 +635,7 @@ namespace VolumeFlow
                     // 7. WAV header
                     try {
                         fs.Position = 0;
-                        WriteWavHeader(fs, totalBytes, fmt, isExtensible, isFloat);
+                        WriteWavHeader(fs, totalBytes, fmtEx, isExtensible, isFloat);
                         fs.Flush();
                         Log("Saved recording to: " + FilePath + " (" + totalBytes + " bytes)");
                     } catch (Exception ex) {

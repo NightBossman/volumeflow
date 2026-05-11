@@ -59,27 +59,24 @@
   });
 
   function setVolume(pid, volume) {
-    ipcRenderer.send('bridge-command', { action: 'set_volume', pid, volume });
+    ipcRenderer.send('set-session-volume', { id: pid, volume });
   }
 
   function toggleMute(pid) {
-    ipcRenderer.send('bridge-command', { action: 'toggle_mute', pid });
+    ipcRenderer.send('toggle-session-mute', { id: pid });
   }
 
   function setMasterVolume(volume) {
-    ipcRenderer.send('bridge-command', { action: 'set_master_volume', volume });
+    ipcRenderer.send('set-master-volume', { id: 'master', volume });
   }
 
   function toggleMasterMute() {
-    // In current bridge we don't have toggle_master, we use set_master_volume with mute state
-    // But for simplicity in this UI we'll just send a command if we had one.
-    // For now, let's assume we can set it.
+    ipcRenderer.send('toggle-session-mute', { id: 'master' });
   }
 
   function toggleDucking() {
     duckingEnabled = !duckingEnabled;
-    ipcRenderer.send('bridge-command', { 
-      action: 'set_ducking', 
+    ipcRenderer.send('set-ducking', { 
       enabled: duckingEnabled,
       triggerPid: duckingTriggerPid,
       threshold: 0.05,
@@ -91,8 +88,7 @@
   function setDuckingTrigger(pid) {
     duckingTriggerPid = pid;
     if (duckingEnabled) {
-      ipcRenderer.send('bridge-command', { 
-        action: 'set_ducking', 
+      ipcRenderer.send('set-ducking', { 
         enabled: true,
         triggerPid: pid
       });
@@ -103,19 +99,19 @@
     if (activeRecordings.has(pid)) {
       activeRecordings.delete(pid);
       activeRecordings = activeRecordings; // trigger reactivity
-      ipcRenderer.send('bridge-command', { action: 'stop_recording', pid });
+      ipcRenderer.send('stop-recording', { pid });
       ipcRenderer.send('show-osd', { message: 'Recording stopped', icon: 'stop' });
     } else {
       activeRecordings.add(pid);
       activeRecordings = activeRecordings;
-      ipcRenderer.send('bridge-command', { action: 'start_recording', pid });
+      ipcRenderer.send('start-recording', { pid });
       ipcRenderer.send('show-osd', { message: 'Recording started', icon: 'record' });
     }
   }
 
   function toggleBoost() {
     boostActive = !boostActive;
-    ipcRenderer.send('bridge-command', { action: 'set_boost', active: boostActive, factor: 0.6 });
+    ipcRenderer.send('set-boost', { active: boostActive, factor: 0.6 });
   }
 
   function openRecordingsFolder() {

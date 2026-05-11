@@ -13,8 +13,12 @@ const __dirname = path.dirname(__filename);
 const isDev = process.env.NODE_ENV === 'development';
 
 let mainWindow = null;
+let osdWindow = null;
 let tray = null;
 let isQuitting = false;
+
+// Polling stats interval
+let healthCheckInterval = null;
 
 // Tracker for active fades to prevent overlaps
 const activeFades = new Map(); // pid -> { cancel: () => void }
@@ -68,6 +72,7 @@ function startBridge() {
         if (parsed.status === 'ready') {
           bridgeReady = true;
           console.log('AudioBridge is ready');
+          startHealthMonitoring();
           continue;
         }
 
@@ -109,6 +114,32 @@ function startBridge() {
   });
 }
 
+function startHealthMonitoring() {
+  if (healthCheckInterval) clearInterval(healthCheckInterval);
+  
+  healthCheckInterval = setInterval(async () => {
+    if (!bridgeReady) return;
+
+    try {
+      const stats = await sendBridgeCommand({ action: 'get_stats' });
+      if (stats && stats.status === 'ok') {
+        if (stats.droppedPeaks > 100) {
+          console.warn(`[Health] Performance Warning: AudioBridge dropped ${stats.droppedPeaks} peak frames due to stdout backpressure.`);
+        }
+      }
+    } catch (err) {
+      console.error('[Health] Failed to get bridge stats:', err);
+    }
+  }, 10000); // Check every 10 seconds
+}
+
+function stopHealthMonitoring() {
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+    healthCheckInterval = null;
+  }
+}
+
 function sendBridgeCommand(command) {
   return new Promise((resolve, reject) => {
     if (!bridgeProcess || !bridgeReady || !bridgeProcess.stdin.writable) {
@@ -135,6 +166,7 @@ function sendBridgeCommand(command) {
 
 function stopBridge() {
   isQuitting = true;
+  stopHealthMonitoring();
   if (bridgeProcess) {
     try {
       if (bridgeProcess.stdin.writable) {
@@ -182,6 +214,44 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
   }
+}
+
+function createOSDWindow() {
+  osdWindow = new BrowserWindow({
+    width: 300,
+    height: 120,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    resizable: false,
+    show: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  osdWindow.loadFile(path.join(__dirname, 'osd.html'));
+  osdWindow.setIgnoreMouseEvents(true);
+}
+
+function showOSD(message, icon = 'info') {
+  if (!osdWindow) createOSDWindow();
+
+  osdWindow.webContents.send('show-osd', { message, icon });
+  osdWindow.show();
+
+  // Position at bottom right
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+  osdWindow.setPosition(width - 320, height - 140);
+
+  setTimeout(() => {
+    if (osdWindow) osdWindow.hide();
+  }, 3000);
 }
 
 function createTray() {
@@ -318,6 +388,18 @@ ipcMain.on('stop-recording', (event, { pid }) => {
   sendBridgeCommand({ action: 'stop_recording', pid });
 });
 
+ipcMain.on('show-osd', (event, { message, icon }) => {
+  showOSD(message, icon);
+});
+
+ipcMain.on('open-recordings', () => {
+  const recordingsPath = path.join(__dirname, 'Recordings');
+  if (!fs.existsSync(recordingsPath)) {
+    fs.mkdirSync(recordingsPath);
+  }
+  require('electron').shell.openPath(recordingsPath);
+});
+
 const userDataPath = app.getPath('userData');
 const configPath = path.join(userDataPath, 'config.json');
 
@@ -429,6 +511,10 @@ ipcMain.handle('get-audio-sessions', async () => {
 
 ipcMain.on('toggle-session-mute', async (event, { id }) => {
   if (!id) return;
+  if (id === 'master') {
+    await sendBridgeCommand({ action: 'toggle_master_mute' });
+    return;
+  }
   const pid = parseInt(id);
   if (isNaN(pid)) return;
   await sendBridgeCommand({ action: 'toggle_mute', pid: pid });
@@ -465,6 +551,7 @@ ipcMain.on('set-master-volume', async (event, { id, volume }) => {
 app.whenReady().then(() => {
   startBridge();
   createWindow();
+  createOSDWindow();
   createTray();
 
   app.on('activate', () => {

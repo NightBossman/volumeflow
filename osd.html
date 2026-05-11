@@ -94,9 +94,15 @@
     <script>
         const { ipcRenderer } = require('electron');
 
-        ipcRenderer.on('update-osd', (event, { title, message, type }) => {
-            document.getElementById('osd-title').innerText = title || 'VolumeFlow';
+        ipcRenderer.on('show-osd', (event, { message, icon }) => {
+            document.getElementById('osd-title').innerText = 'VolumeFlow';
             document.getElementById('osd-message').innerText = message;
+            
+            // Set icon if provided
+            const iconSvg = icon === 'stop' 
+                ? '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>'
+                : '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>';
+            document.getElementById('osd-icon').innerHTML = iconSvg;
             
             const container = document.getElementById('osd');
             const progress = document.getElementById('osd-progress');
@@ -112,7 +118,10 @@
                 progress.style.width = '0%';
             }, 10);
 
-            // Trigger close after 3s handled by main process, but we can also do it here
+            // Auto-hide after 3 seconds
+            setTimeout(() => {
+                container.classList.remove('visible');
+            }, 3000);
         });
 
         ipcRenderer.on('hide-osd', () => {
