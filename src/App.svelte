@@ -1,845 +1,897 @@
 <script>
-  import './app.css';
-  import VolumeSlider from './lib/VolumeSlider.svelte';
-  import { onMount, onDestroy } from 'svelte';
-  import { 
-    X, 
-    Maximize2, 
-    Minimize2, 
-    Minus,
-    Sun, 
-    Moon, 
-    Users, 
-    Settings,
-    Activity,
-    Info,
-    Heart,
-    Power,
-    Zap,
-    Mic
-  } from '@lucide/svelte';
+  import { onMount } from 'svelte';
+  const { ipcRenderer } = window.require('electron');
 
-  const { ipcRenderer } = window.electron;
+  let sessions = [];
+  let masterVolume = 0;
+  let masterMuted = false;
+  let duckingEnabled = false;
+  let duckingTriggerPid = -1;
+  let activeTab = 'mixer'; // 'mixer', 'settings', 'about'
+  let activeRecordings = new Set();
+  let boostActive = false;
+  let searchQuery = '';
 
-  let isExpanded = $state(false);
-  let showAbout = $state(false);
-  let currentTheme = $state('midnight');
-  let eyeSaver = $state(false);
-  let autoStart = $state(false);
+  // Peak levels (updated via bridge-peaks event)
+  let masterPeak = 0;
+  let sessionPeaks = {};
 
-  // Auto-Duck States
-  let duckingEnabled = $state(false);
-  let duckingTriggerPid = $state(-1);
-  let duckingThreshold = $state(0.05);
-  let duckingFactor = $state(0.2);
-  let masterVolume = $state(75);
-  let masterMuted = $state(false);
-  let masterId = $state('');
-  let processes = $state([]);
-  let peaks = $state({}); // PID -> value (0.0 to 1.0)
-  let masterPeak = $state(0);
-  let profiles = $state([]); // { id, name, sessions: [{ name, volume }], masterVolume }
-  let iconCache = $state(new Map());
+  $: filteredSessions = sessions.filter(s => 
+    s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    s.pid.toString().includes(searchQuery)
+  );
 
-  // Recording & Boost States
-  let recordingPids = $state(new Set());
-  let isBoostActive = $state(false);
+  onMount(() => {
+    refreshSessions();
+    refreshMaster();
+
+    const interval = setInterval(refreshSessions, 1000);
+
+    ipcRenderer.on('bridge-peaks', (event, data) => {
+      masterPeak = data.master;
+      sessionPeaks = data.sessions;
+    });
+
+    return () => {
+      clearInterval(interval);
+      ipcRenderer.removeAllListeners('bridge-peaks');
+    };
+  });
+
+  async function refreshSessions() {
+    ipcRenderer.send('bridge-command', { action: 'get_sessions' });
+  }
+
+  async function refreshMaster() {
+    ipcRenderer.send('bridge-command', { action: 'get_master' });
+  }
+
+  ipcRenderer.on('bridge-response', (event, response) => {
+    if (response.status === 'ok') {
+      if (response.sessions) {
+        sessions = response.sessions;
+      }
+      if (response.master) {
+        masterVolume = response.master.volume;
+        masterMuted = response.master.muted;
+      }
+    }
+  });
+
+  function setVolume(pid, volume) {
+    ipcRenderer.send('bridge-command', { action: 'set_volume', pid, volume });
+  }
+
+  function toggleMute(pid) {
+    ipcRenderer.send('bridge-command', { action: 'toggle_mute', pid });
+  }
+
+  function setMasterVolume(volume) {
+    ipcRenderer.send('bridge-command', { action: 'set_master_volume', volume });
+  }
+
+  function toggleMasterMute() {
+    // In current bridge we don't have toggle_master, we use set_master_volume with mute state
+    // But for simplicity in this UI we'll just send a command if we had one.
+    // For now, let's assume we can set it.
+  }
+
+  function toggleDucking() {
+    duckingEnabled = !duckingEnabled;
+    ipcRenderer.send('bridge-command', { 
+      action: 'set_ducking', 
+      enabled: duckingEnabled,
+      triggerPid: duckingTriggerPid,
+      threshold: 0.05,
+      factor: 0.2,
+      fadeSpeed: 0.05
+    });
+  }
+
+  function setDuckingTrigger(pid) {
+    duckingTriggerPid = pid;
+    if (duckingEnabled) {
+      ipcRenderer.send('bridge-command', { 
+        action: 'set_ducking', 
+        enabled: true,
+        triggerPid: pid
+      });
+    }
+  }
 
   function toggleRecording(pid) {
-    if (recordingPids.has(pid)) {
-      recordingPids.delete(pid);
-      ipcRenderer.send('stop-recording', { pid });
+    if (activeRecordings.has(pid)) {
+      activeRecordings.delete(pid);
+      activeRecordings = activeRecordings; // trigger reactivity
+      ipcRenderer.send('bridge-command', { action: 'stop_recording', pid });
+      ipcRenderer.send('show-osd', { message: 'Recording stopped', icon: 'stop' });
     } else {
-      recordingPids.add(pid);
-      ipcRenderer.send('start-recording', { pid });
+      activeRecordings.add(pid);
+      activeRecordings = activeRecordings;
+      ipcRenderer.send('bridge-command', { action: 'start_recording', pid });
+      ipcRenderer.send('show-osd', { message: 'Recording started', icon: 'record' });
     }
   }
 
   function toggleBoost() {
-    isBoostActive = !isBoostActive;
-    ipcRenderer.send('set-boost', { active: isBoostActive });
+    boostActive = !boostActive;
+    ipcRenderer.send('bridge-command', { action: 'set_boost', active: boostActive, factor: 0.6 });
   }
 
-  const themes = [
-    { id: 'midnight', name: 'Midnight', color: '#0078d4' },
-    { id: 'solar', name: 'Solar', color: '#ff4d00' },
-    { id: 'matrix', name: 'Matrix', color: '#00ff41' },
-    { id: 'frost', name: 'Frost', color: '#00f2ff' },
-    { id: 'cyberpunk', name: 'Cyberpunk', color: '#fcee0a' }
-  ];
-
-  async function loadSessions() {
-    try {
-      const liveProcesses = await ipcRenderer.invoke('get-audio-sessions');
-      if (liveProcesses) {
-        processes = liveProcesses.map(p => ({ ...p, volume: Math.round(p.volume * 100) }));
-      }
-
-      for (const process of processes) {
-        if (process.path && !iconCache.has(process.path)) {
-          iconCache.set(process.path, 'loading'); 
-          ipcRenderer.invoke('get-app-icon', process.path).then(iconData => {
-            if (iconData) {
-              iconCache.set(process.path, iconData);
-              processes = [...processes];
-            } else {
-              iconCache.set(process.path, null);
-            }
-          });
-        }
-      }
-
-      const info = await ipcRenderer.invoke('get-master-info');
-      if (info) {
-        masterVolume = Math.round(info.volume * 100);
-        masterMuted = info.muted;
-        masterId = info.id;
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  function saveSettings() {
-    ipcRenderer.send('save-settings', $state.snapshot({
-      theme: currentTheme,
-      eyeSaver: eyeSaver,
-      autoStart: autoStart,
-      profiles: profiles,
-      ducking: {
-        enabled: duckingEnabled,
-        triggerPid: duckingTriggerPid,
-        threshold: duckingThreshold,
-        factor: duckingFactor
-      }
-    }));
-  }
-
-  function updateDucking() {
-    ipcRenderer.send('set-ducking', {
-      enabled: duckingEnabled,
-      triggerPid: duckingTriggerPid,
-      threshold: duckingThreshold,
-      factor: duckingFactor
-    });
-    saveSettings();
-  }
-
-  function addProfile() {
-    const name = prompt('Nazwa sceny:', `Scena ${profiles.length + 1}`);
-    if (!name) return;
-
-    const newProfile = {
-      id: Date.now(),
-      name: name,
-      masterVolume: masterVolume,
-      sessions: processes.map(p => ({ name: p.name, volume: p.volume / 100 }))
-    };
-
-    profiles = [...profiles, newProfile];
-    saveSettings();
-  }
-
-  async function applyProfile(profile) {
-    await ipcRenderer.invoke('apply-profile', $state.snapshot(profile));
-  }
-
-  function deleteProfile(id) {
-    profiles = profiles.filter(p => p.id !== id);
-    saveSettings();
-  }
-
-  function setTheme(themeId) {
-    currentTheme = themeId;
-    document.body.setAttribute('data-theme', themeId);
-    saveSettings();
-  }
-
-  function toggleMode() {
-    isExpanded = !isExpanded;
-    showAbout = false;
-    const width = 400;
-    const height = isExpanded ? 700 : 350;
-    ipcRenderer.send('set-window-size', { width, height });
-  }
-
-  function handleVolumeChange(id, volume) {
-    ipcRenderer.send('set-session-volume', { id, volume: volume / 100 });
-  }
-
-  function handleMasterChange() {
-    ipcRenderer.send('set-master-volume', { id: 'master', volume: masterVolume / 100 });
-  }
-
-  function handleMute(id) {
-    ipcRenderer.send('toggle-session-mute', { id });
-    loadSessions();
-  }
-
-  function hideToTray() {
-    ipcRenderer.send('minimize-to-tray');
+  function openRecordingsFolder() {
+    ipcRenderer.send('open-recordings');
   }
 
   function closeApp() {
     ipcRenderer.send('close-app');
   }
 
-  function handlePeaks(data) {
-    if (!data) return;
-    masterPeak = data.master || 0;
-    if (data.sessions) {
-      peaks = data.sessions;
-    }
+  function minimizeApp() {
+    ipcRenderer.send('minimize-app');
   }
-
-  onMount(async () => {
-    try {
-      const savedSettings = await ipcRenderer.invoke('load-settings');
-      if (savedSettings) {
-        if (savedSettings.theme) {
-          currentTheme = savedSettings.theme;
-          document.body.setAttribute('data-theme', currentTheme);
-        }
-        if (savedSettings.eyeSaver !== undefined) {
-          eyeSaver = savedSettings.eyeSaver;
-        }
-        if (savedSettings.autoStart !== undefined) {
-          autoStart = savedSettings.autoStart;
-        }
-        if (savedSettings.profiles) {
-          profiles = savedSettings.profiles;
-        }
-        if (savedSettings.ducking) {
-          duckingEnabled = savedSettings.ducking.enabled ?? false;
-          duckingTriggerPid = savedSettings.ducking.triggerPid ?? -1;
-          duckingThreshold = savedSettings.ducking.threshold ?? 0.05;
-          duckingFactor = savedSettings.ducking.factor ?? 0.2;
-          // Notify bridge immediately after load
-          setTimeout(updateDucking, 1000);
-        }
-      } else {
-        document.body.setAttribute('data-theme', currentTheme);
-      }
-    } catch (e) {
-      console.error('Failed to load settings:', e);
-    }
-
-    let isRunning = true;
-    
-    async function pollSessions() {
-      if (!isRunning) return;
-      await loadSessions();
-      if (isRunning) {
-        setTimeout(pollSessions, 2500);
-      }
-    }
-    
-    // on() returns an unsubscribe closure — no removeListener matching needed
-    const unsubPeaks = ipcRenderer.on('audio-peaks', handlePeaks);
-
-    pollSessions();
-    ipcRenderer.send('set-window-size', { width: 400, height: 600 });
-    
-    return () => {
-      isRunning = false;
-      if (typeof unsubPeaks === 'function') unsubPeaks();
-    };
-  });
 </script>
 
-<main class:eye-saver-active={eyeSaver}>
-  <div class="eye-saver-overlay"></div>
-  <header class="draggable">
-    <div class="title-group">
-      <Activity size={14} color="var(--primary-color)" />
-      <div class="title">VolumeFlow</div>
-    </div>
-    <div class="controls no-drag">
-      <button onclick={toggleMode} class="icon-btn" title="Tryb">
-        {#if isExpanded}
-          <Minimize2 size={18} />
-        {:else}
-          <Maximize2 size={18} />
-        {/if}
-      </button>
-      <button onclick={hideToTray} class="icon-btn" title="Schowaj do zasobnika">
-        <Minus size={18} />
-      </button>
-      <button onclick={closeApp} class="icon-btn close" title="Zamknij">
-        <X size={20} />
-      </button>
-    </div>
-  </header>
+<main>
+  <div class="glass-container">
+    <!-- Header / Title Bar -->
+    <header class="title-bar">
+      <div class="brand">
+        <div class="logo">
+          <div class="logo-inner"></div>
+        </div>
+        <h1>VolumeFlow</h1>
+      </div>
+      <div class="window-controls">
+        <button class="control-btn" on:click={minimizeApp}>
+          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>
+        </button>
+        <button class="control-btn close" on:click={closeApp}>
+          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/></svg>
+        </button>
+      </div>
+    </header>
 
-  <div class="view-container">
-    <section class="master-section">
-      <VolumeSlider 
-        label="Głośność Główna" 
-        bind:value={masterVolume} 
-        isMaster={true} 
-        muted={masterMuted}
-        peak={masterPeak}
-        isBoost={isBoostActive}
-        onboost={toggleBoost}
-        onchange={handleMasterChange}
-        onmute={() => handleMute(masterId)}
-      />
+    <!-- Master Control Section -->
+    <section class="master-control">
+      <div class="master-info">
+        <span class="label">System Master</span>
+        <span class="value">{Math.round(masterVolume * 100)}%</span>
+      </div>
+      <div class="slider-group">
+        <button class="mute-btn {masterMuted ? 'muted' : ''}" on:click={toggleMasterMute}>
+          {#if masterMuted}
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+          {:else}
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+          {/if}
+        </button>
+        <div class="slider-container">
+          <div class="peak-bg"></div>
+          <div class="peak-bar master" style="width: {masterPeak * 100}%"></div>
+          <input 
+            type="range" 
+            min="0" 
+            max="1" 
+            step="0.01" 
+            value={masterVolume} 
+            on:input={(e) => setMasterVolume(e.target.value)}
+          />
+        </div>
+      </div>
     </section>
 
-    <div class="separator"></div>
+    <!-- Navigation Tabs -->
+    <nav class="tabs">
+      <button class="tab {activeTab === 'mixer' ? 'active' : ''}" on:click={() => activeTab = 'mixer'}>
+        Mixer
+      </button>
+      <button class="tab {activeTab === 'settings' ? 'active' : ''}" on:click={() => activeTab = 'settings'}>
+        Settings
+      </button>
+      <button class="tab {activeTab === 'about' ? 'active' : ''}" on:click={() => activeTab = 'about'}>
+        About
+      </button>
+    </nav>
 
-    <section class="process-list">
-      <div class="section-title">
-        {isExpanded ? 'Aktywne Procesy' : 'Najczęstsze'}
-      </div>
-      
-      {#each isExpanded ? processes : processes.slice(0, 2) as process}
-        <VolumeSlider 
-          label={process.name} 
-          bind:value={process.volume} 
-          muted={process.muted}
-          peak={peaks[process.pid] || 0}
-          isRecording={recordingPids.has(process.pid)}
-          onrecord={() => toggleRecording(process.pid)}
-          onchange={() => handleVolumeChange(process.id, process.volume)}
-          onmute={() => handleMute(process.id)}
-        >
-          {#snippet icon()}
-            <div class="icon-container">
-              {#if process.path && iconCache.has(process.path) && iconCache.get(process.path) !== 'loading' && iconCache.get(process.path) !== null}
-                <img src={iconCache.get(process.path)} alt="" class="app-icon" />
-              {:else}
-                <Activity size={16} />
-              {/if}
-            </div>
-          {/snippet}
-        </VolumeSlider>
-      {/each}
-
-      {#if isExpanded}
-        <div class="advanced-section">
-          {#if !showAbout}
-            <div class="section-title">Personalizacja</div>
-            <div class="theme-row">
-              <div class="theme-selector">
-                {#each themes as theme}
-                  <button 
-                    class="theme-dot" 
-                    class:active={currentTheme === theme.id}
-                    style="background: {theme.color}"
-                    onclick={() => setTheme(theme.id)}
-                  ></button>
-                {/each}
-              </div>
-              
-              <button 
-                class="eye-saver-toggle no-drag" 
-                class:active={eyeSaver}
-                onclick={() => { eyeSaver = !eyeSaver; saveSettings(); }}
-              >
-                {#if eyeSaver}
-                  <Moon size={14} /> <span>Eye Saver: ON</span>
-                {:else}
-                  <Sun size={14} /> <span>Eye Saver: OFF</span>
-                {/if}
-              </button>
-            </div>
-
-            <div class="section-title" style="margin-top: 24px">Auto-Duck (Inteligentne Wyciszanie)</div>
-            <div class="ducking-card">
-              <div class="ducking-row">
-                <div class="ducking-info">
-                  <Zap size={14} color="var(--primary-color)" />
-                  <span>Aktywuj Auto-Duck</span>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" class="no-drag" bind:checked={duckingEnabled} onchange={updateDucking}>
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              
-              {#if duckingEnabled}
-                <div class="ducking-settings">
-                  <div class="duck-setting-item">
-                    <label>Proces wyzwalający (Trigger):</label>
-                    <select class="no-drag" bind:value={duckingTriggerPid} onchange={updateDucking}>
-                      <option value={-1}>Wybierz proces...</option>
-                      {#each processes as p}
-                        <option value={p.pid}>{p.name} (PID: {p.pid})</option>
-                      {/each}
-                    </select>
-                  </div>
-                  
-                  <div class="duck-setting-item">
-                    <div class="label-row">
-                      <label>Czułość (Threshold):</label>
-                      <span>{(duckingThreshold * 100).toFixed(0)}%</span>
-                    </div>
-                    <input type="range" class="no-drag" min="0.01" max="0.5" step="0.01" bind:value={duckingThreshold} oninput={updateDucking}>
-                  </div>
-                  
-                  <div class="duck-setting-item">
-                    <div class="label-row">
-                      <label>Siła wyciszenia (Duck Factor):</label>
-                      <span>{(duckingFactor * 100).toFixed(0)}%</span>
-                    </div>
-                    <input type="range" class="no-drag" min="0.05" max="0.8" step="0.05" bind:value={duckingFactor} oninput={updateDucking}>
-                  </div>
-                </div>
-              {/if}
-            </div>
-
-            <div class="section-title" style="margin-top: 24px">Tryb Scen (Profile)</div>
-          <div class="profiles-container">
-            <div class="profiles-list">
-              {#each profiles as profile}
-                <div class="profile-item">
-                  <button class="profile-btn no-drag" onclick={() => applyProfile(profile)}>
-                    {profile.name}
-                  </button>
-                  <button class="profile-delete no-drag" onclick={() => deleteProfile(profile.id)}>
-                    <X size={12} />
-                  </button>
-                </div>
-              {/each}
-            </div>
-            <button class="add-profile-btn no-drag" onclick={addProfile}>
-              <span>+ Zapisz obecną scenę</span>
-            </button>
+    <!-- Main Content Area -->
+    <div class="content">
+      {#if activeTab === 'mixer'}
+        <div class="search-bar">
+          <div class="search-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
           </div>
-
-          <div class="section-title" style="margin-top: 24px">Ustawienia Systemowe</div>
-          <div class="advanced-options">
-            <button class="advanced-btn no-drag" class:active={autoStart} onclick={() => { autoStart = !autoStart; saveSettings(); }}>
-              <Power size={16} /> <span>{autoStart ? 'Autostart: ON' : 'Autostart: OFF'}</span>
-            </button>
-            <button class="advanced-btn no-drag" onclick={() => showAbout = true}>
-              <Info size={16} /> <span>O programie</span>
-            </button>
-          </div>
-          {:else}
-            <div class="about-card">
-              <div class="about-header">
-                <Activity size={24} color="var(--primary-color)" />
-                <h3>VolumeFlow v1.5.1</h3>
-              </div>
-              <p>Premium Windows Audio Mixer stworzony z myślą o estetyce i wydajności.</p>
-              <div class="stats">
-                <div class="stat-item">
-                  <span class="stat-label">Technologia:</span>
-                  <span class="stat-val">Svelte 5 + Electron</span>
-                </div>
-                <div class="stat-item">
-                  <span class="stat-label">Status:</span>
-                  <span class="stat-val">Hardened (v1.5.1)</span>
-                </div>
-              </div>
-              <div class="about-footer">
-                <button class="back-btn" onclick={() => showAbout = false}>Wróć</button>
-                <div class="made-with">
-                  Made with <Heart size={10} color="#ff4444" fill="#ff4444" /> for Users
-                </div>
-              </div>
-            </div>
+          <input 
+            type="text" 
+            placeholder="Search processes..." 
+            bind:value={searchQuery}
+          />
+          {#if searchQuery}
+            <button class="clear-search" on:click={() => searchQuery = ''}>&times;</button>
           {/if}
         </div>
-      {/if}
-    </section>
 
+        <div class="session-list">
+          {#if filteredSessions.length === 0}
+            <div class="empty-state">
+              {#if searchQuery}
+                No processes match your search.
+              {:else}
+                No active audio sessions found.
+              {/if}
+            </div>
+          {/if}
+          {#each filteredSessions as session (session.pid)}
+            <div class="session-card {duckingTriggerPid === session.pid ? 'is-trigger' : ''}">
+              <div class="session-header">
+                <div class="session-info">
+                  <span class="name">{session.name}</span>
+                  <span class="pid">PID: {session.pid}</span>
+                </div>
+                <div class="session-actions">
+                  <button 
+                    class="action-btn {activeRecordings.has(session.pid) ? 'recording' : ''}" 
+                    title="Record this app"
+                    on:click={() => toggleRecording(session.pid)}
+                  >
+                    <div class="record-dot"></div>
+                  </button>
+                  <button 
+                    class="action-btn {duckingTriggerPid === session.pid ? 'ducking' : ''}" 
+                    title="Set as Ducking Trigger"
+                    on:click={() => setDuckingTrigger(session.pid)}
+                  >
+                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9v-2h2v2zm0-4H9V7h2v5z"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="slider-group">
+                <button class="mute-btn {session.muted ? 'muted' : ''}" on:click={() => toggleMute(session.pid)}>
+                  <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+                </button>
+                <div class="slider-container">
+                  <div class="peak-bg"></div>
+                  <div class="peak-bar" style="width: {(sessionPeaks[session.pid] || 0) * 100}%"></div>
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="1" 
+                    step="0.01" 
+                    value={session.volume} 
+                    on:input={(e) => setVolume(session.pid, e.target.value)}
+                  />
+                </div>
+                <span class="vol-text">{Math.round(session.volume * 100)}%</span>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {:else if activeTab === 'settings'}
+        <div class="settings-list">
+          <div class="setting-item">
+            <div class="setting-info">
+              <span class="title">Smart Overdrive</span>
+              <span class="desc">Podbij głośność powyżej 100% bez clippingu.</span>
+            </div>
+            <button class="toggle {boostActive ? 'on' : ''}" on:click={toggleBoost}>
+              <div class="handle"></div>
+            </button>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <span class="title">Auto-Ducking</span>
+              <span class="desc">Wycisz tło gdy {duckingTriggerPid !== -1 ? 'wybrany proces' : 'proces'} emituje dźwięk.</span>
+            </div>
+            <button class="toggle {duckingEnabled ? 'on' : ''}" on:click={toggleDucking}>
+              <div class="handle"></div>
+            </button>
+          </div>
+
+          <div class="setting-item action-only">
+            <div class="setting-info">
+              <span class="title">Recordings Folder</span>
+              <span class="desc">Otwórz folder z nagranymi plikami .wav</span>
+            </div>
+            <button class="action-btn primary" on:click={openRecordingsFolder}>
+              Open Folder
+            </button>
+          </div>
+        </div>
+      {:else if activeTab === 'about'}
+        <div class="about-card">
+          <div class="about-header">
+            <div class="icon-container">
+               <img src="assets/tray-icon.png" alt="logo" class="app-icon" />
+            </div>
+            <h3>VolumeFlow v1.7.0</h3>
+          </div>
+          <p>
+            Premium Windows Audio Control & Monitoring. Designed for professionals and power users.
+          </p>
+          <div class="stats">
+            <div class="stat-item">
+              <span class="stat-label">Audio Engine:</span>
+              <span class="stat-value">V1.8.0 (Hardened)</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Platform:</span>
+              <span class="stat-value">Electron + Svelte</span>
+            </div>
+          </div>
+          <div class="about-footer">
+            <button class="back-btn" on:click={() => activeTab = 'mixer'}>Back to Mixer</button>
+            <div class="made-with">
+              Made with <span style="color: #ff4444;">❤</span> for Sound
+            </div>
+          </div>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Footer Status Bar -->
     <footer>
-      Vibe: {themes.find(t => t.id === currentTheme).name} | 
-      {eyeSaver ? 'Protection' : 'Standard'}
+      {#if duckingEnabled}
+        <span class="status-badge ducking">Ducking Active</span>
+      {/if}
+      {#if boostActive}
+        <span class="status-badge boost">Boost Active</span>
+      {/if}
+      {#if activeRecordings.size > 0}
+        <span class="status-badge recording">Recording {activeRecordings.size} app(s)</span>
+      {/if}
+      <span class="spacer"></span>
+      <span class="version">v1.7.0 Stable</span>
     </footer>
   </div>
 </main>
 
 <style>
+  :root {
+    --primary-color: #00f2ff;
+    --primary-glow: rgba(0, 242, 255, 0.5);
+    --bg-dark: #0a0a0c;
+    --glass-bg: rgba(20, 20, 25, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --card-bg: rgba(255, 255, 255, 0.03);
+    --text-main: #ffffff;
+    --text-dim: rgba(255, 255, 255, 0.5);
+  }
+
   main {
+    width: 100vw;
+    height: 100vh;
     display: flex;
-    flex-direction: column;
-    height: 100%;
-    box-sizing: border-box;
-  }
-
-  .view-container {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
+    justify-content: center;
+    align-items: center;
     overflow: hidden;
-    transition: filter 0.5s ease;
+    color: var(--text-main);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   }
 
-  header {
-    height: 44px;
+  .glass-container {
+    width: 100%;
+    height: 100%;
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  }
+
+  .title-bar {
+    height: 60px;
+    padding: 0 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 16px;
-    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid var(--glass-border);
+    -webkit-app-region: drag;
   }
 
-  .title-group {
+  .brand {
     display: flex;
     align-items: center;
-    gap: 8px;
-  }
-
-  .title {
-    font-weight: 700;
-    font-size: 0.8em;
-    letter-spacing: 1px;
-    opacity: 0.9;
-    text-transform: uppercase;
-  }
-
-  .controls {
-    display: flex;
     gap: 12px;
-    align-items: center;
   }
 
-  .icon-btn {
+  .logo {
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--primary-color);
+    border-radius: 6px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-shadow: 0 0 10px var(--primary-glow);
+  }
+
+  .logo-inner {
+    width: 10px;
+    height: 10px;
+    background: var(--primary-color);
+    border-radius: 2px;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.2); opacity: 0.5; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  h1 {
+    font-size: 1.1em;
+    font-weight: 700;
+    letter-spacing: 1px;
+    margin: 0;
+    background: linear-gradient(to right, #fff, var(--primary-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .window-controls {
+    display: flex;
+    gap: 8px;
+    -webkit-app-region: no-drag;
+  }
+
+  .control-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .control-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+  }
+
+  .control-btn.close:hover {
+    background: #ff4444;
+  }
+
+  .master-control {
+    padding: 25px 20px;
+    background: linear-gradient(to bottom, rgba(0, 242, 255, 0.05), transparent);
+  }
+
+  .master-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .master-info .label {
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--primary-color);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .master-info .value {
+    font-size: 1.2em;
+    font-weight: 700;
+  }
+
+  .tabs {
+    display: flex;
+    padding: 0 20px;
+    gap: 20px;
+    border-bottom: 1px solid var(--glass-border);
+  }
+
+  .tab {
+    padding: 12px 0;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 0.9em;
+    font-weight: 600;
+    cursor: pointer;
+    position: relative;
+    transition: color 0.3s;
+  }
+
+  .tab.active {
+    color: var(--primary-color);
+  }
+
+  .tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: var(--primary-color);
+    box-shadow: 0 0 10px var(--primary-glow);
+  }
+
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+
+  .search-bar {
+    position: relative;
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    padding: 0 12px;
+    border: 1px solid var(--glass-border);
+    transition: all 0.3s;
+  }
+
+  .search-bar:focus-within {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 15px rgba(0, 242, 255, 0.1);
+  }
+
+  .search-icon {
+    color: var(--text-dim);
+    margin-right: 10px;
+  }
+
+  .search-bar input {
+    flex: 1;
     background: transparent;
     border: none;
     color: white;
-    padding: 4px;
-    cursor: pointer;
-    opacity: 0.6;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .icon-btn:hover {
-    opacity: 1;
-    transform: scale(1.1);
-  }
-
-  .icon-btn.close:hover {
-    color: #ff4444;
-  }
-
-  .master-section {
-    padding: 20px 16px;
-  }
-
-  .separator {
-    height: 1px;
-    background: var(--glass-border);
-    margin: 0 16px;
-  }
-
-  .section-title {
-    font-size: 0.65em;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: rgba(255, 255, 255, 0.4);
-    margin-bottom: 14px;
-    padding-left: 4px;
-    font-weight: 700;
-  }
-
-  .process-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-  }
-
-  .advanced-section {
-    margin-top: 24px;
-    padding: 20px 16px;
-    background: rgba(255, 255, 255, 0.02);
-    border-radius: 12px;
-    border: 1px solid var(--glass-border);
-    min-height: 200px;
-  }
-
-  .theme-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 8px;
-  }
-
-  .theme-selector {
-    display: flex;
-    gap: 12px;
-  }
-
-  .theme-dot {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    border: 2px solid transparent;
-    cursor: pointer;
-    transition: transform 0.2s;
-  }
-
-  .theme-dot.active {
-    border-color: white;
-    box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
-  }
-
-  .eye-saver-toggle {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--glass-border);
-    color: white;
-    padding: 8px 14px;
-    border-radius: 20px;
-    font-size: 0.7em;
-    cursor: pointer;
-    transition: all 0.2s;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .eye-saver-toggle.active {
-    background: #ffcc00;
-    color: black;
-    border-color: #ffcc00;
-  }
-
-  .advanced-options {
-    margin-top: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .advanced-btn {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--glass-border);
-    color: white;
-    padding: 12px;
-    border-radius: 8px;
-    font-size: 0.8em;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .advanced-btn:hover {
-    background: var(--glass-border);
-    padding-left: 16px;
-  }
-
-  .advanced-btn.active {
-    background: var(--primary-color);
-    border-color: var(--primary-color);
-  }
-
-  /* Ducking UI */
-  .ducking-card {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--glass-border);
-    border-radius: 12px;
-    padding: 14px;
-    margin-bottom: 20px;
-    transition: all 0.3s ease;
-  }
-
-  .ducking-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .ducking-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.85em;
-    font-weight: 600;
-  }
-
-  .ducking-settings {
-    margin-top: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding-top: 14px;
-    border-top: 1px solid var(--glass-border);
-    animation: slideDown 0.3s ease;
-  }
-
-  @keyframes slideDown {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .duck-setting-item {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .duck-setting-item label {
-    font-size: 0.7em;
-    color: rgba(255, 255, 255, 0.5);
-    font-weight: 600;
-  }
-
-  .duck-setting-item select {
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--glass-border);
-    color: white;
-    padding: 8px;
-    border-radius: 6px;
-    font-size: 0.85em;
+    height: 40px;
+    font-size: 0.9em;
     outline: none;
   }
 
-  .label-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .label-row span {
-    font-size: 0.75em;
-    color: var(--primary-color);
-    font-weight: 700;
-  }
-
-  /* Switch Style */
-  .switch {
-    position: relative;
-    display: inline-block;
-    width: 36px;
-    height: 20px;
-  }
-
-  .switch input { opacity: 0; width: 0; height: 0; }
-
-  .slider {
-    position: absolute;
+  .clear-search {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.2em;
     cursor: pointer;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background-color: rgba(255,255,255,0.1);
-    transition: .4s;
+    padding: 0 5px;
   }
 
-  .slider:before {
-    position: absolute;
-    content: "";
-    height: 14px; width: 14px;
-    left: 3px; bottom: 3px;
-    background-color: white;
-    transition: .4s;
-  }
-
-  input:checked + .slider { background-color: var(--primary-color); }
-  input:checked + .slider:before { transform: translateX(16px); }
-  .slider.round { border-radius: 20px; }
-  .slider.round:before { border-radius: 50%; }
-
-  /* Profiles UI */
-  .profiles-container {
+  .session-list {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .profiles-list {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
+  .empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.9em;
+    background: var(--card-bg);
+    border-radius: 12px;
+    border: 1px dashed var(--glass-border);
   }
 
-  .profile-item {
-    display: flex;
-    background: rgba(255, 255, 255, 0.05);
+  .session-card {
+    background: var(--card-bg);
     border: 1px solid var(--glass-border);
-    border-radius: 8px;
-    overflow: hidden;
-    transition: all 0.2s;
+    border-radius: 12px;
+    padding: 15px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  .profile-item:hover {
-    border-color: var(--primary-color);
+  .session-card:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.2);
     transform: translateY(-2px);
   }
 
-  .profile-btn {
-    flex: 1;
-    background: transparent;
-    border: none;
-    color: white;
-    padding: 10px;
-    font-size: 0.75em;
+  .session-card.is-trigger {
+    border-color: #ffaa00;
+    background: rgba(255, 170, 0, 0.05);
+  }
+
+  .session-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 15px;
+  }
+
+  .session-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+  }
+
+  .session-info .name {
     font-weight: 600;
-    cursor: pointer;
-    text-align: left;
+    font-size: 0.95em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .profile-delete {
-    background: rgba(255, 0, 0, 0.1);
-    border: none;
-    border-left: 1px solid var(--glass-border);
-    color: rgba(255, 255, 255, 0.5);
-    padding: 0 10px;
+  .session-info .pid {
+    font-size: 0.7em;
+    color: var(--text-dim);
+    font-family: monospace;
+  }
+
+  .session-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .action-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--text-dim);
+    display: flex;
+    justify-content: center;
+    align-items: center;
     cursor: pointer;
     transition: all 0.2s;
   }
 
-  .profile-delete:hover {
-    background: #ff4444;
+  .action-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
     color: white;
   }
 
-  .add-profile-btn {
-    background: transparent;
-    border: 1px dashed var(--glass-border);
-    color: rgba(255, 255, 255, 0.5);
-    padding: 12px;
-    border-radius: 8px;
-    font-size: 0.75em;
-    cursor: pointer;
-    transition: all 0.2s;
+  .action-btn.recording {
+    border-color: #ff4444;
+    color: #ff4444;
+    background: rgba(255, 68, 68, 0.1);
+    box-shadow: 0 0 10px rgba(255, 68, 68, 0.3);
   }
 
-  .add-profile-btn:hover {
-    border-style: solid;
-    border-color: var(--primary-color);
-    color: var(--primary-color);
-    background: rgba(255, 255, 255, 0.02);
+  .record-dot {
+    width: 10px;
+    height: 10px;
+    background: currentColor;
+    border-radius: 50%;
   }
 
-  /* About Card Styles */
-  .about-card {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    animation: fadeIn 0.3s ease;
+  .action-btn.recording .record-dot {
+    animation: blink 1s infinite;
   }
 
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+  @keyframes blink {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+    100% { opacity: 1; transform: scale(1); }
   }
 
-  .icon-container {
-    width: 18px;
-    height: 18px;
+  .action-btn.ducking {
+    border-color: #ffaa00;
+    color: #ffaa00;
+    background: rgba(255, 170, 0, 0.1);
+  }
+
+  .slider-group {
     display: flex;
     align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
+    gap: 12px;
   }
 
-  .app-icon {
+  .slider-container {
+    flex: 1;
+    height: 32px;
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .peak-bg {
+    position: absolute;
+    top: 50%;
+    left: 0;
     width: 100%;
-    height: 100%;
-    object-fit: contain;
-    filter: drop-shadow(0 0 2px rgba(0,0,0,0.3));
+    height: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 2px;
+    transform: translateY(-50%);
+  }
+
+  .peak-bar {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    height: 4px;
+    background: var(--primary-color);
+    border-radius: 2px;
+    transform: translateY(-50%);
+    opacity: 0.3;
+    transition: width 0.1s ease;
+  }
+
+  .peak-bar.master {
+    background: var(--primary-color);
+    opacity: 0.5;
+  }
+
+  input[type="range"] {
+    position: relative;
+    z-index: 2;
+    -webkit-appearance: none;
+    width: 100%;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  input[type="range"]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    background: transparent;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: white;
+    margin-top: -6px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.5), 0 0 5px var(--primary-glow);
+    border: 2px solid var(--primary-color);
+    transition: transform 0.2s;
+  }
+
+  input[type="range"]:active::-webkit-slider-thumb {
+    transform: scale(1.2);
+  }
+
+  .mute-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: color 0.2s;
+  }
+
+  .mute-btn:hover {
+    color: white;
+  }
+
+  .mute-btn.muted {
+    color: #ff4444;
+  }
+
+  .vol-text {
+    width: 35px;
+    font-size: 0.75em;
+    font-weight: 700;
+    text-align: right;
+    color: var(--text-dim);
+    font-family: monospace;
+  }
+
+  .settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .setting-item {
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .setting-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .setting-info .title {
+    font-weight: 600;
+    font-size: 0.95em;
+  }
+
+  .setting-info .desc {
+    font-size: 0.75em;
+    color: var(--text-dim);
+  }
+
+  .toggle {
+    width: 44px;
+    height: 24px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    border: 1px solid var(--glass-border);
+    position: relative;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+
+  .toggle.on {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+  }
+
+  .handle {
+    width: 18px;
+    height: 18px;
+    background: white;
+    border-radius: 50%;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.3s;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  }
+
+  .toggle.on .handle {
+    transform: translateX(20px);
+  }
+
+  .action-btn.primary {
+    background: var(--primary-color);
+    color: #000;
+    border: none;
+    font-weight: 700;
+    font-size: 0.8em;
+    width: auto;
+    padding: 0 16px;
+    border-radius: 6px;
+  }
+
+  footer {
+    height: 35px;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.7em;
+    border-top: 1px solid var(--glass-border);
+  }
+
+  .status-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .status-badge.ducking { background: rgba(255, 170, 0, 0.2); color: #ffaa00; }
+  .status-badge.boost { background: rgba(0, 242, 255, 0.2); color: var(--primary-color); }
+  .status-badge.recording { background: rgba(255, 68, 68, 0.2); color: #ff4444; }
+
+  .spacer { flex: 1; }
+  .version { color: var(--text-dim); }
+
+  /* About Styles */
+  .about-card {
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 15px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
   }
 
   .about-header {
@@ -848,26 +900,37 @@
     gap: 12px;
   }
 
-  .about-header h3 {
+  .icon-container {
+    width: 32px;
+    height: 32px;
+  }
+
+  .app-icon {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .about-card h3 {
     margin: 0;
-    font-size: 1em;
+    font-size: 1.1em;
     color: var(--primary-color);
   }
 
   .about-card p {
-    font-size: 0.8em;
-    color: rgba(255, 255, 255, 0.6);
-    line-height: 1.5;
+    font-size: 0.85em;
+    line-height: 1.6;
+    color: var(--text-dim);
     margin: 0;
   }
 
   .stats {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    background: rgba(255, 255, 255, 0.03);
-    padding: 10px;
-    border-radius: 8px;
+    gap: 8px;
   }
 
   .stat-item {
@@ -876,41 +939,28 @@
     font-size: 0.75em;
   }
 
-  .stat-label { color: rgba(255, 255, 255, 0.4); }
+  .stat-label { color: var(--text-dim); }
+  .stat-value { font-weight: 700; color: var(--primary-color); }
 
   .about-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 12px;
+    margin-top: 5px;
   }
 
   .back-btn {
-    background: var(--primary-color);
-    border: none;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
     color: white;
-    padding: 6px 16px;
-    border-radius: 4px;
+    padding: 6px 15px;
+    border-radius: 6px;
     font-size: 0.8em;
     cursor: pointer;
+    transition: all 0.2s;
   }
 
-  .made-with {
-    font-size: 0.7em;
-    color: rgba(255, 255, 255, 0.3);
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
+  .back-btn:hover { background: rgba(255, 255, 255, 0.1); }
 
-  footer {
-    height: 30px;
-    background: rgba(0, 0, 0, 0.3);
-    display: flex;
-    align-items: center;
-    padding: 0 16px;
-    font-size: 0.7em;
-    color: rgba(255, 255, 255, 0.3);
-    letter-spacing: 0.5px;
-  }
+  .made-with { font-size: 0.75em; color: var(--text-dim); }
 </style>
