@@ -7,6 +7,7 @@
   --accent-color: #00c2ff;
   --danger-color: #ff4d00;
   --text-color: #ffffff;
+  --eye-saver-color: rgba(255, 165, 0, 0.15);
 }
 
 [data-theme="solar"] {
@@ -14,6 +15,7 @@
   --primary-color: #ff4d00;
   --accent-color: #ffcc00;
   --danger-color: #ff0055;
+  --eye-saver-color: rgba(255, 100, 0, 0.2);
 }
 
 [data-theme="matrix"] {
@@ -41,12 +43,10 @@
 body {
   margin: 0;
   padding: 0;
-  font-family: 'Segoe UI', 'Outfit', sans-serif;
+  font-family: 'Outfit', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   background: transparent;
   color: var(--text-color);
-  user-select: none;
-  overflow: hidden;
-  transition: all 0.5s ease; /* Płynne przejście między motywami */
+  /* Removed user-select: none and overflow: hidden from body for better UX */
 }
 
 #app {
@@ -54,22 +54,60 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg-color);
-  backdrop-filter: blur(25px);
+  backdrop-filter: blur(12px); /* Reduced for performance */
   border: 1px solid var(--glass-border);
   border-radius: 12px;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+  overflow: hidden; /* Control scroll here instead of body */
+  transition: background 0.4s ease, color 0.4s ease; /* Specific transitions only */
+  position: relative;
 }
 
-.draggable { -webkit-app-region: drag; }
-.no-drag { -webkit-app-region: no-drag; }
-
-.eye-saver {
-  filter: sepia(1.1) brightness(0.6) contrast(0.8) !important;
+.draggable { 
+  -webkit-app-region: drag; 
+  user-select: none; /* Only disable selection on draggable areas */
 }
 
-::-webkit-scrollbar { width: 4px; }
+.no-drag { 
+  -webkit-app-region: no-drag; 
+  user-select: auto; /* Re-enable selection for interactive elements */
+}
+
+/* Better Eye Saver implementation using an overlay instead of heavy filters */
+.eye-saver-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--eye-saver-color);
+  pointer-events: none;
+  z-index: 9999;
+  mix-blend-mode: multiply;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.eye-saver-active .eye-saver-overlay {
+  opacity: 1;
+}
+
+/* Improved Scrollbar UX */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+::-webkit-scrollbar-thumb:hover {
   background: var(--primary-color);
-  opacity: 0.3;
-  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent-color);
+}
+
+/* Input selection fallback */
+input, select, textarea {
+  user-select: text !important;
 }

@@ -30,7 +30,7 @@
 <div class="slider-container" class:muted>
   <div class="header">
     <div class="label-group">
-      <button class="mute-btn" onclick={toggleMute} title={muted ? "Odwycisz" : "Wycisz"}>
+      <button class="mute-btn no-drag" onclick={toggleMute} title={muted ? "Odwycisz" : "Wycisz"}>
         {#if muted}
           <VolumeX size={16} strokeWidth={2.5} color="#ff4444" />
         {:else if icon}
@@ -46,7 +46,7 @@
     <div class="actions-group">
       {#if !isMaster}
         <button 
-          class="rec-btn" 
+          class="rec-btn no-drag" 
           class:recording={isRecording} 
           onclick={() => onrecord && onrecord()} 
           title={isRecording ? "Zatrzymaj nagrywanie" : "Nagrywaj aplikację"}
@@ -57,7 +57,7 @@
       {/if}
       {#if isMaster}
         <button 
-          class="boost-btn" 
+          class="boost-btn no-drag" 
           class:active={isBoost} 
           onclick={() => onboost && onboost()} 
           title={isBoost ? "Wyłącz Smart Overdrive" : "Włącz Smart Overdrive"}
@@ -74,6 +74,7 @@
     <div class="peak-glow" style="width: {peak * 100}%" class:is-muted={muted}></div>
     <input 
       type="range" 
+      class="no-drag"
       min="0" 
       max="150" 
       {value} 

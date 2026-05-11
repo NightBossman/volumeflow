@@ -6,6 +6,9 @@
 - **Smart Overdrive (Boost)**: Inteligentne wzmocnienie głośności Master (Relative Reduction) zapobiegające clippingowi.
 - **Dynamic Tray Icon**: Programowe generowanie ikony tray (brak zależności od plików zewnętrznych).
 - **Auto-Ducking 2.0**: Ulepszona logika wyciszania tła z płynnymi przejściami (fades).
+- **UI/UX Performance Optimization**: Wdrożenie warstwy nakładki (overlay) dla Eye Saver zamiast ciężkich filtrów CSS.
+- **Improved Drag & Interaction**: Dodanie `no-drag` do wszystkich interaktywnych elementów UI (suwaki, przyciski).
+- **Startup Validation**: Weryfikacja obecności elementu root (#app) przed inicjalizacją frontendu.
 
 ### Fixed
 - **IPC Stability**: Usunięto błędy Unhandled Promise Rejection w procesie głównym Electrona.

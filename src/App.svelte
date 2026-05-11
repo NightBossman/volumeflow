@@ -247,7 +247,8 @@
   });
 </script>
 
-<main>
+<main class:eye-saver-active={eyeSaver}>
+  <div class="eye-saver-overlay"></div>
   <header class="draggable">
     <div class="title-group">
       <Activity size={14} color="var(--primary-color)" />
@@ -270,7 +271,7 @@
     </div>
   </header>
 
-  <div class="view-container" class:eye-saver={eyeSaver}>
+  <div class="view-container">
     <section class="master-section">
       <VolumeSlider 
         label="Głośność Główna" 
@@ -332,7 +333,7 @@
               </div>
               
               <button 
-                class="eye-saver-toggle" 
+                class="eye-saver-toggle no-drag" 
                 class:active={eyeSaver}
                 onclick={() => { eyeSaver = !eyeSaver; saveSettings(); }}
               >
@@ -352,7 +353,7 @@
                   <span>Aktywuj Auto-Duck</span>
                 </div>
                 <label class="switch">
-                  <input type="checkbox" bind:checked={duckingEnabled} onchange={updateDucking}>
+                  <input type="checkbox" class="no-drag" bind:checked={duckingEnabled} onchange={updateDucking}>
                   <span class="slider round"></span>
                 </label>
               </div>
@@ -361,7 +362,7 @@
                 <div class="ducking-settings">
                   <div class="duck-setting-item">
                     <label>Proces wyzwalający (Trigger):</label>
-                    <select bind:value={duckingTriggerPid} onchange={updateDucking}>
+                    <select class="no-drag" bind:value={duckingTriggerPid} onchange={updateDucking}>
                       <option value={-1}>Wybierz proces...</option>
                       {#each processes as p}
                         <option value={p.pid}>{p.name} (PID: {p.pid})</option>
@@ -374,7 +375,7 @@
                       <label>Czułość (Threshold):</label>
                       <span>{(duckingThreshold * 100).toFixed(0)}%</span>
                     </div>
-                    <input type="range" min="0.01" max="0.5" step="0.01" bind:value={duckingThreshold} oninput={updateDucking}>
+                    <input type="range" class="no-drag" min="0.01" max="0.5" step="0.01" bind:value={duckingThreshold} oninput={updateDucking}>
                   </div>
                   
                   <div class="duck-setting-item">
@@ -382,7 +383,7 @@
                       <label>Siła wyciszenia (Duck Factor):</label>
                       <span>{(duckingFactor * 100).toFixed(0)}%</span>
                     </div>
-                    <input type="range" min="0.05" max="0.8" step="0.05" bind:value={duckingFactor} oninput={updateDucking}>
+                    <input type="range" class="no-drag" min="0.05" max="0.8" step="0.05" bind:value={duckingFactor} oninput={updateDucking}>
                   </div>
                 </div>
               {/if}
@@ -393,26 +394,26 @@
             <div class="profiles-list">
               {#each profiles as profile}
                 <div class="profile-item">
-                  <button class="profile-btn" onclick={() => applyProfile(profile)}>
+                  <button class="profile-btn no-drag" onclick={() => applyProfile(profile)}>
                     {profile.name}
                   </button>
-                  <button class="profile-delete" onclick={() => deleteProfile(profile.id)}>
+                  <button class="profile-delete no-drag" onclick={() => deleteProfile(profile.id)}>
                     <X size={12} />
                   </button>
                 </div>
               {/each}
             </div>
-            <button class="add-profile-btn" onclick={addProfile}>
+            <button class="add-profile-btn no-drag" onclick={addProfile}>
               <span>+ Zapisz obecną scenę</span>
             </button>
           </div>
 
           <div class="section-title" style="margin-top: 24px">Ustawienia Systemowe</div>
           <div class="advanced-options">
-            <button class="advanced-btn" class:active={autoStart} onclick={() => { autoStart = !autoStart; saveSettings(); }}>
+            <button class="advanced-btn no-drag" class:active={autoStart} onclick={() => { autoStart = !autoStart; saveSettings(); }}>
               <Power size={16} /> <span>{autoStart ? 'Autostart: ON' : 'Autostart: OFF'}</span>
             </button>
-            <button class="advanced-btn" onclick={() => showAbout = true}>
+            <button class="advanced-btn no-drag" onclick={() => showAbout = true}>
               <Info size={16} /> <span>O programie</span>
             </button>
           </div>
