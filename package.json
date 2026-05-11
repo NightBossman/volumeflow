@@ -1,31 +1,24 @@
 {
   "name": "volumeflow",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Premium Windows Audio Mixer",
   "main": "main.js",
-  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NightBossman/volumeflow.git"
+  },
   "scripts": {
     "dev": "concurrently \"vite\" \"cross-env NODE_ENV=development electron .\"",
     "build": "vite build && electron-builder",
+    "pack": "electron-packager . VolumeFlow --platform=win32 --arch=x64 --out=release-slim --overwrite --ignore=\"node_modules|src|build-cache|release|release-packager|.git|vite.config.js|svelte.config.js|AudioBridge.cs|AudioController.cs|AudioController.exe|TestAC.exe|audio_bridge.*|master.*|sessions.*|test.*|test2.json|test3.json|tray-icon.*|readme.txt\"",
     "preview": "vite preview"
   },
-  "keywords": [],
-  "author": "Antigravity",
-  "license": "MIT",
-  "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^4.0.0",
-    "concurrently": "^8.2.2",
-    "cross-env": "^7.0.3",
-    "electron": "^41.0.0",
-    "electron-builder": "^24.13.3",
-    "svelte": "^5.0.0",
-    "vite": "^8.0.10"
-  },
-  "dependencies": {
-    "@lucide/svelte": "^0.479.0"
-  },
   "build": {
-    "appId": "com.antigravity.volumeflow",
+    "appId": "com.volumeflow.app",
+    "productName": "VolumeFlow",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "dist/**/*",
       "main.js",
@@ -33,9 +26,33 @@
       "AudioBridge.exe",
       "package.json"
     ],
+    "asarUnpack": [
+      "AudioBridge.exe"
+    ],
     "win": {
-      "target": "portable",
-      "icon": "public/icon.ico"
+      "target": "portable"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "VolumeFlow"
     }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.0.0",
+    "electron-builder": "^26.8.1",
+    "electron-packager": "^17.1.2",
+    "svelte": "^5.55.5",
+    "vite": "^8.0.10"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.14.0"
   }
 }

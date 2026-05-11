@@ -1,31 +1,18 @@
 # Changelog - VolumeFlow
 
-## [1.6.0] - 2026-05-05
+## [1.7.0] - 2026-05-11
 ### Added
-- **Per-App Audio Recording**: Możliwość nagrywania dźwięku z konkretnych procesów do plików WAV (WASAPI Loopback).
-- **Smart Overdrive (Boost)**: Inteligentne wzmocnienie głośności Master (Relative Reduction) zapobiegające clippingowi.
-- **Dynamic Tray Icon**: Programowe generowanie ikony tray (brak zależności od plików zewnętrznych).
-- **Auto-Ducking 2.0**: Ulepszona logika wyciszania tła z płynnymi przejściami (fades).
-- **UI/UX Performance Optimization**: Wdrożenie warstwy nakładki (overlay) dla Eye Saver zamiast ciężkich filtrów CSS.
-- **Improved Drag & Interaction**: Dodanie `no-drag` do wszystkich interaktywnych elementów UI (suwaki, przyciski).
-- **Startup Validation**: Weryfikacja obecności elementu root (#app) przed inicjalizacją frontendu.
+- **OSD Notifications**: Graficzne powiadomienia na ekranie informujące o zmianach profilu, statusie nagrywania i trybie Boost.
+- **Process Search**: Nowy pasek wyszukiwania pozwalający błyskawicznie odfiltrować aplikacje na liście.
+- **AudioBridge V1.8.0**: Ulepszony, utwardzony silnik audio z asynchronicznym buforowaniem stdout (zapobiega blokowaniu procesu) i lepszą obsługą błędów COM.
+- **Open Recordings Button**: Szybki dostęp do folderu nagrań bezpośrednio z panelu ustawień.
+- **Health Monitoring**: Automatyczne monitorowanie wydajności mostka audio (telemetria get_stats).
 
 ### Fixed
-- **IPC Stability**: Usunięto błędy Unhandled Promise Rejection w procesie głównym Electrona.
-- **Polling Safety**: Dodano sprawdzanie nulli i bezpieczne rzutowanie interfejsów COM w pętli szczytowej (PeakPollingLoop).
+- **Recording Stability**: Naprawiono błąd, przez który pliki nagrań nie zapisywały się poprawnie na niektórych systemach.
+- **UI Interaction**: Poprawiono zachowanie przycisków w regionach "drag", przywracając pełną interaktywność suwaków.
 
-## [1.5.0] - 2026-05-04
-### Added
-- **Reliability Update**: Kompleksowa stabilizacja komunikacji i zarządzania pamięcią.
-- **IPC Protocol V2**: Wprowadzenie `requestId` dla asynchronicznego routingu żądań – eliminuje błędy kolejkowania.
-- **Context Bridge Security**: Pełna migracja na `contextIsolation: true` i `contextBridge` w Electronie.
-- **Auto-Cleanup**: Automatyczne zamykanie mostka przy wyjściu z aplikacji (`isQuitting` flag).
-
-### Fixed
-- **COM Resource Leaks**: Gwarantowane zwalnianie obiektów COM w pętli `PeakPollingLoop` (eliminacja crashy przy zmianie urządzeń).
-- **Process Handle Leaks**: Bezpieczne zamykanie uchwytów procesów Windows dzięki `using`.
-- **Fading Glitches**: Naprawiono nakładanie się animacji głośności (asynchroniczny fade z anulowaniem).
-- **Preload Best Practices**: Zastosowano poprawki sugerowane przez Codex (once: true, dev-only logging).
+## [1.6.0] - 2026-05-10
 
 ## [1.1.0] - 2026-05-04
 ### Added

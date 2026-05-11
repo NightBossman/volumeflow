@@ -4,7 +4,7 @@ Witaj w mapie drogowej projektu **VolumeFlow**. Tutaj śledzimy naszą podróż 
 
 ---
 
-## 🚀 Status Projektu: **v1.6.0 Stable**
+## 🚀 Status Projektu: **v1.7.0 Stable**
 > [!TIP]
 > Każda nowa funkcja przechodzi rygorystyczne testy wydajnościowe, aby VolumeFlow pozostał najlżejszym mikserem audio klasy premium.
 
@@ -20,23 +20,23 @@ Witaj w mapie drogowej projektu **VolumeFlow**. Tutaj śledzimy naszą podróż 
 - [x] **Eye Saver**: Zintegrowany filtr światła niebieskiego dla nocnych sesji.
 - [x] **App Icons**: Dynamiczne wyciąganie ikon bezpośrednio z procesów systemowych.
 
-### ⚡ Phase 2: Power User Features (v1.5 - v1.6)
+### ⚡ Phase 2: Power User Features (v1.5 - v1.7)
 - [x] **Per-App Recording**: Nagrywanie dźwięku z konkretnych aplikacji do plików WAV (WASAPI Loopback).
 - [x] **Smart Overdrive (Boost)**: Bezpieczne wzmocnienie Mastera bez cyfrowych przesterowań.
 - [x] **Visual Peaks**: Prawdziwa wizualizacja natężenia dźwięku na każdym suwaku.
-- [x] **Auto-Ducking**: Automatyczne przyciszanie tła, gdy wykryty zostanie dźwięk w wybranej aplikacji (np. Spotify cichnie, gdy ktoś mówi na Discord).
+- [x] **Auto-Ducking**: Automatyczne przyciszanie tła, gdy wykryty zostanie dźwięk w wybranej aplikacji.
 - [x] **UI/UX Optimization**: Nowa, wydajna nakładka Eye Saver i pełna obsługa Drag&Drop okna.
+- [x] **Search & Filter**: Błyskawiczne wyszukiwanie aplikacji na liście.
+- [x] **OSD Notifications**: Graficzne powiadomienia o zmianie profilu i statusie nagrywania.
 
 ---
 
-## 🛠️ W trakcie realizacji (v1.7 - v1.8)
+## 🛠️ W trakcie realizacji (v1.8)
 
 | Funkcja | Opis | Status |
 | :--- | :--- | :---: |
 | **Global Hotkeys** | Skróty klawiszowe do przełączania scen i nagrywania | 🏗️ Budowa |
-| **Search & Filter** | Błyskawiczne wyszukiwanie aplikacji na liście | 🎨 Design |
 | **Mini-Player Mode** | Jeszcze mniejszy tryb interfejsu (tylko 3 najważniejsze suwaki) | 📝 Planowanie |
-| **OSD Notifications** | Graficzne powiadomienia o zmianie profilu na ekranie | 📝 Planowanie |
 
 ---
 
@@ -54,10 +54,10 @@ Witaj w mapie drogowej projektu **VolumeFlow**. Tutaj śledzimy naszą podróż 
 graph LR
     A[Alpha 0.1] --> B[Stable 1.0]
     B --> C[Audio Pro 1.5]
-    C --> D[v1.6 Recording]
+    C --> D[v1.7 OSD & Search]
     D --> E{Future v2.0}
     style D fill:#f96,stroke:#333,stroke-width:4px
 ```
 
 ---
-*Ostatnia aktualizacja: 2026-05-11 (v1.6.0)*
+*Ostatnia aktualizacja: 2026-05-11 (v1.7.0)*
