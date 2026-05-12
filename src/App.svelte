@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  const { ipcRenderer } = window.require('electron');
+  const { ipcRenderer } = window.electron;
 
   let sessions = [];
   let masterVolume = 0;
@@ -26,6 +26,15 @@
   let hotkeyError = '';
   let hotkeySaved = false;
 
+  const isMini = window.electron?.isMini || false;
+  let advancedSettings = {
+    duckingThreshold: 0.05,
+    duckingFactor: 0.2,
+    fadeDuration: 800,
+    autoStart: false
+  };
+  let settingsLoading = true;
+
   $: filteredSessions = sessions.filter(s => 
     s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     s.pid.toString().includes(searchQuery)
@@ -38,6 +47,15 @@
     // Load hotkeys from main process (fire-and-forget, no await)
     ipcRenderer.invoke('get-hotkeys').then(savedHotkeys => {
       if (savedHotkeys) hotkeys = { ...hotkeys, ...savedHotkeys };
+    });
+
+    // Load advanced settings
+    ipcRenderer.invoke('load-settings').then(cfg => {
+      if (cfg) {
+        if (cfg.advancedSettings) advancedSettings = { ...advancedSettings, ...cfg.advancedSettings };
+        advancedSettings.autoStart = cfg.autoStart || false;
+      }
+      settingsLoading = false;
     });
 
     const interval = setInterval(refreshSessions, 1000);
@@ -109,9 +127,8 @@
     ipcRenderer.send('set-ducking', { 
       enabled: duckingEnabled,
       triggerPid: duckingTriggerPid,
-      threshold: 0.05,
-      factor: 0.2,
-      fadeSpeed: 0.05
+      threshold: advancedSettings.duckingThreshold,
+      factor: advancedSettings.duckingFactor
     });
   }
 
@@ -204,10 +221,72 @@
       hotkeyError = (result && result.error) || 'Failed to save hotkeys.';
     }
   }
+
+  function saveSettings() {
+    ipcRenderer.send('save-settings', {
+      autoStart: advancedSettings.autoStart,
+      advancedSettings: {
+        duckingThreshold: advancedSettings.duckingThreshold,
+        duckingFactor: advancedSettings.duckingFactor,
+        fadeDuration: advancedSettings.fadeDuration
+      }
+    });
+    // We could add a "Saved" indicator here too
+  }
+
+  function toggleMiniPlayer() {
+    ipcRenderer.send('toggle-mini-player');
+  }
 </script>
 
-<main>
-  <div class="glass-container">
+<main class={isMini ? 'mini-mode' : ''}>
+  <div class="glass-container {isMini ? 'mini-container' : ''}">
+    {#if isMini}
+      <!-- Mini Player View -->
+      <header class="title-bar mini-drag">
+        <div class="brand">
+          <div class="logo small"></div>
+          <h1>Flow</h1>
+        </div>
+        <div class="window-controls">
+          <button class="control-btn mini-btn" on:click={toggleMiniPlayer} title="Exit Mini-Player">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+          </button>
+          <button class="control-btn close" on:click={closeApp}>
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="mini-content">
+        <!-- Master control -->
+        <div class="mini-section">
+          <div class="mini-header">Master Output</div>
+          <div class="mini-control-row">
+             <button class="mute-btn small {masterMuted ? 'muted' : ''}" on:click={toggleMasterMute}>
+               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+             </button>
+             <div class="mini-slider">
+               <input type="range" min="0" max="1" step="0.01" value={masterVolume} on:input={(e) => setMasterVolume(e.target.value)} />
+             </div>
+             <span class="mini-val">{Math.round(masterVolume * 100)}%</span>
+          </div>
+        </div>
+
+        <!-- Top Sessions -->
+        <div class="mini-section">
+          <div class="mini-header">Active Apps</div>
+          {#each sessions.slice(0, 3) as session}
+            <div class="mini-session-row">
+              <span class="mini-app-name" title={session.name}>{session.name}</span>
+              <div class="mini-slider-small">
+                <input type="range" min="0" max="1" step="0.01" value={session.volume} on:input={(e) => setVolume(session.pid, e.target.value)} />
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {:else}
     <!-- Header / Title Bar -->
     <header class="title-bar">
       <div class="brand">
@@ -217,6 +296,9 @@
         <h1>VolumeFlow</h1>
       </div>
       <div class="window-controls">
+        <button class="control-btn mini-btn" on:click={toggleMiniPlayer} title="Switch to Mini-Player">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/></svg>
+        </button>
         <button class="control-btn" on:click={minimizeApp}>
           <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>
         </button>
@@ -372,6 +454,38 @@
             </button>
           </div>
 
+          <!-- Advanced Audio Control -->
+          <div class="hotkey-section">
+            <div class="hotkey-section-header">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+              <span>Advanced Audio Control</span>
+            </div>
+            
+            <div class="advanced-row">
+              <span class="advanced-label">Ducking Threshold</span>
+              <div class="advanced-input-group">
+                <input type="range" min="0.01" max="0.5" step="0.01" bind:value={advancedSettings.duckingThreshold} on:change={saveSettings} />
+                <span class="advanced-value">{advancedSettings.duckingThreshold}</span>
+              </div>
+            </div>
+
+            <div class="advanced-row">
+              <span class="advanced-label">Ducking Strength</span>
+              <div class="advanced-input-group">
+                <input type="range" min="0.05" max="0.8" step="0.05" bind:value={advancedSettings.duckingFactor} on:change={saveSettings} />
+                <span class="advanced-value">{Math.round((1 - advancedSettings.duckingFactor) * 100)}%</span>
+              </div>
+            </div>
+
+            <div class="advanced-row">
+              <span class="advanced-label">Fade Duration (ms)</span>
+              <div class="advanced-input-group">
+                <input type="range" min="100" max="3000" step="50" bind:value={advancedSettings.fadeDuration} on:change={saveSettings} />
+                <span class="advanced-value">{advancedSettings.fadeDuration}ms</span>
+              </div>
+            </div>
+          </div>
+
           <!-- Global Hotkeys Section -->
           <div class="hotkey-section">
             <div class="hotkey-section-header">
@@ -443,7 +557,9 @@
           </div>
         </div>
       {/if}
-    </div>
+    {/if}
+  </div>
+</main>
 
     <!-- Footer Status Bar -->
     <footer>
@@ -1181,5 +1297,142 @@
     background: rgba(0, 200, 100, 0.8);
     color: #000;
   }
+
+  /* ---- Advanced Audio Control ---- */
+  .advanced-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+
+  .advanced-label {
+    font-size: 0.78em;
+    color: var(--text-dim);
+  }
+
+  .advanced-input-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .advanced-input-group input[type="range"] {
+    flex: 1;
+    height: 4px;
+  }
+
+  .advanced-value {
+    font-size: 0.78em;
+    font-family: monospace;
+    color: var(--primary-color);
+    width: 45px;
+    text-align: right;
+  }
+
+  /* ---- Mini-Player Styles ---- */
+  .mini-mode {
+    background: transparent !important;
+  }
+
+  .mini-container {
+    width: 240px !important;
+    height: 350px !important;
+    overflow: hidden;
+    padding: 0 !important;
+    border-radius: 12px;
+  }
+
+  .mini-drag {
+    -webkit-app-region: drag;
+    padding: 10px 15px !important;
+    border-bottom: 1px solid var(--glass-border);
+  }
+
+  .mini-drag * {
+    -webkit-app-region: no-drag;
+  }
+
+  .mini-btn {
+    opacity: 0.7;
+  }
+  .mini-btn:hover {
+    opacity: 1;
+    color: var(--primary-color);
+  }
+
+  .mini-content {
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .mini-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .mini-header {
+    font-size: 0.65em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--primary-color);
+    font-weight: 700;
+  }
+
+  .mini-control-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mini-slider {
+    flex: 1;
+  }
+
+  .mini-slider input {
+    height: 5px;
+  }
+
+  .mini-val {
+    font-size: 0.75em;
+    font-family: monospace;
+    width: 30px;
+    text-align: right;
+  }
+
+  .mini-session-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--glass-border);
+  }
+
+  .mini-app-name {
+    font-size: 0.72em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-main);
+  }
+
+  .mini-slider-small input {
+    height: 3px;
+  }
+
+  .mute-btn.small {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 </style>
+
 

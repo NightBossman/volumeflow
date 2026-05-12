@@ -13,6 +13,7 @@ const __dirname = path.dirname(__filename);
 const isDev = process.env.NODE_ENV === 'development';
 
 let mainWindow = null;
+let miniWindow = null;
 let osdWindow = null;
 let tray = null;
 let isQuitting = false;
@@ -33,6 +34,13 @@ let hotkeyRecordingPid = null;
 
 // Shared boost state — synced between UI and hotkey
 let hotkeyBoostState = false;
+
+// Advanced Audio Settings
+let advancedSettings = {
+  duckingThreshold: 0.05,
+  duckingFactor: 0.2,
+  fadeDuration: 800
+};
 
 function registerHotkeys() {
   globalShortcut.unregisterAll();
@@ -303,6 +311,47 @@ function createWindow() {
   }
 }
 
+function createMiniWindow() {
+  if (miniWindow) return;
+
+  miniWindow = new BrowserWindow({
+    width: 240,
+    height: 350,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: path.join(__dirname, 'preload.cjs'),
+      additionalArguments: [`--vf-dev=${isDev}`, `--vf-mode=mini`],
+    },
+  });
+
+  if (isDev) {
+    miniWindow.loadURL('http://localhost:5173');
+  } else {
+    miniWindow.loadFile(path.join(__dirname, 'dist/index.html'));
+  }
+
+  miniWindow.on('closed', () => {
+    miniWindow = null;
+  });
+}
+
+ipcMain.on('toggle-mini-player', (event) => {
+  if (miniWindow) {
+    miniWindow.close();
+    if (mainWindow) mainWindow.show();
+  } else {
+    if (mainWindow) mainWindow.hide();
+    createMiniWindow();
+  }
+});
+
+
 function createOSDWindow() {
   osdWindow = new BrowserWindow({
     width: 300,
@@ -460,7 +509,12 @@ ipcMain.on('set-window-size', (event, { width, height }) => {
   }
 });
 ipcMain.on('set-ducking', (event, data) => {
-  sendBridgeCommand({ action: 'set_ducking', ...data });
+  const finalData = {
+    threshold: advancedSettings.duckingThreshold,
+    factor: advancedSettings.duckingFactor,
+    ...data
+  };
+  sendBridgeCommand({ action: 'set_ducking', ...finalData });
 });
 
 ipcMain.on('set-boost', (event, data) => {
@@ -502,6 +556,9 @@ ipcMain.handle('load-settings', () => {
         hotkeys = { ...hotkeys, ...cfg.hotkeys };
         registerHotkeys();
       }
+      if (cfg.advancedSettings) {
+        advancedSettings = { ...advancedSettings, ...cfg.advancedSettings };
+      }
       return cfg;
     }
   } catch (err) {
@@ -512,6 +569,10 @@ ipcMain.handle('load-settings', () => {
 
 ipcMain.handle('get-hotkeys', () => {
   return hotkeys;
+});
+
+ipcMain.handle('get-advanced-settings', () => {
+  return advancedSettings;
 });
 
 ipcMain.on('save-hotkeys', (event, newHotkeys) => {
@@ -550,13 +611,19 @@ ipcMain.on('save-settings', async (event, settings) => {
         path: app.getPath('exe')
       });
     }
+    if (settings.advancedSettings) {
+      advancedSettings = { ...advancedSettings, ...settings.advancedSettings };
+    }
     await fs.promises.writeFile(configPath, JSON.stringify(settings, null, 2), 'utf8');
+    event.reply('save-settings-response', { ok: true });
   } catch (err) {
     console.error('Error saving settings:', err);
+    event.reply('save-settings-response', { ok: false, error: err.message });
   }
 });
 
-async function fadeToVolume(pid, targetVolume, duration = 800) {
+async function fadeToVolume(pid, targetVolume, duration) {
+  const fadeDuration = duration || advancedSettings.fadeDuration || 800;
   if (isQuitting) return;
 
   if (activeFades.has(pid)) {
@@ -564,7 +631,7 @@ async function fadeToVolume(pid, targetVolume, duration = 800) {
   }
 
   const steps = 12;
-  const interval = duration / steps;
+  const interval = fadeDuration / steps;
   
   const result = await sendBridgeCommand({ action: 'get_sessions' });
   if (!result || !result.sessions || isQuitting) return;
