@@ -555,12 +555,43 @@ ipcMain.on('show-osd', (event, { message, icon }) => {
   showOSD(message, icon);
 });
 
-ipcMain.on('open-recordings', () => {
-  const recordingsPath = path.join(__dirname, 'Recordings');
-  if (!fs.existsSync(recordingsPath)) {
-    fs.mkdirSync(recordingsPath);
+// ============================================================
+// Recordings directory — kept in sync with where AudioBridge.exe
+// actually writes WAV files.
+//
+// Bugfix by Claude (Anthropic) model `claude-opus-4-7`:
+// AudioBridge.cs writes to `AppDomain.CurrentDomain.BaseDirectory +
+// "Recordings/"` (i.e. next to the exe). The previous main.js handler
+// opened `path.join(__dirname, 'Recordings')` instead. In dev these
+// two paths happen to be identical, but in a packaged build they
+// diverge — the bridge ends up in `…/resources/app.asar.unpacked/`
+// while `__dirname` points inside the asar virtual filesystem
+// (`…/resources/app.asar/Recordings/`), which doesn't exist on disk.
+// Result: WAV files were saved correctly but "Open Recordings Folder"
+// silently failed (or opened the wrong location), making the whole
+// per-app recording feature *appear* broken to end users.
+//
+// Computing the path from the bridge's own directory keeps the two
+// in lockstep without requiring a rebuild of AudioBridge.exe.
+// ============================================================
+function getRecordingsDir() {
+  let baseDir = __dirname;
+  if (!isDev) {
+    baseDir = baseDir.replace('app.asar', 'app.asar.unpacked');
   }
-  require('electron').shell.openPath(recordingsPath);
+  return path.join(baseDir, 'Recordings');
+}
+
+ipcMain.on('open-recordings', () => {
+  const recordingsPath = getRecordingsDir();
+  try {
+    fs.mkdirSync(recordingsPath, { recursive: true });
+  } catch (err) {
+    console.error('[Recordings] mkdir failed:', err);
+  }
+  require('electron').shell.openPath(recordingsPath).then((errStr) => {
+    if (errStr) console.error('[Recordings] openPath error:', errStr, 'for', recordingsPath);
+  });
 });
 
 const userDataPath = app.getPath('userData');

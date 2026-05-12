@@ -53,10 +53,32 @@ funkcji. Skopiowane tu, żebyś (NightBosman / Antigravity) miał czytelny
 - **Tray label** czytany z `app.getVersion()` zamiast wpisanego na
   sztywno `v1.6.0` (aktualnie i tak zostaje `v1.9.0+`).
 
+### Naprawiono (recording feature) — drugi commit hotfixa
+- **Per-app Audio Recording: ujednolicona ścieżka `Recordings/`.**
+  `AudioBridge.cs` zapisuje pliki .wav do
+  `AppDomain.CurrentDomain.BaseDirectory + "Recordings/"` (obok
+  AudioBridge.exe). Stary handler `open-recordings` w `main.js`
+  otwierał `path.join(__dirname, 'Recordings')`. W trybie deweloperskim
+  obie ścieżki się pokrywały (oba w `<project>/`), ale w buildzie
+  packaged rozjeżdżały się: bridge pisał do
+  `<install>/resources/app.asar.unpacked/Recordings/`, a przycisk
+  "Open Folder" próbował otworzyć
+  `<install>/resources/app.asar/Recordings/` — czyli ścieżkę
+  **wewnątrz wirtualnego asar**, więc `shell.openPath` cicho zawodził.
+  Z perspektywy użytkownika: nagrania były tworzone, ale folder był
+  pusty / nie do otwarcia, więc cała funkcjonalność per-app recording
+  sprawiała wrażenie zepsutej. Fix wylicza katalog z `path.dirname`
+  bridge'a, więc obie strony zawsze patrzą w to samo miejsce — bez
+  konieczności rekompilacji `AudioBridge.exe`. Dodatkowo `mkdirSync`
+  używa teraz `recursive: true` i logujemy ewentualne błędy
+  `shell.openPath`.
+
 ### Nieruszone (świadomie)
 - `AudioBridge.cs` przejrzany — COM cleanup, drop policy dla peak
-  frames, zombie PID GC i obsługa stdout backpressure są zdrowe.
-  Brak zmian.
+  frames, zombie PID GC, obsługa stdout backpressure oraz pętla
+  `RecordingSession.RecordLoop` (event-driven + timer-driven fallback,
+  WAVEFORMATEXTENSIBLE przez IntPtr, poprawny WAV header dla zwykłego
+  PCM, IEEE float i extensible) są zdrowe. Brak zmian.
 - `src/lib/VolumeSlider.svelte` — kod sierota (nigdzie nie importowany).
   Używa runes Svelte 5; Vite go nie kompiluje, więc zostaje
   nienaruszony jako "wishlist" gdybyś chciał refaktor na Svelte 5.
