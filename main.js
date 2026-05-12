@@ -614,7 +614,17 @@ ipcMain.on('save-settings', async (event, settings) => {
     if (settings.advancedSettings) {
       advancedSettings = { ...advancedSettings, ...settings.advancedSettings };
     }
-    await fs.promises.writeFile(configPath, JSON.stringify(settings, null, 2), 'utf8');
+
+    // Read-merge-write: preserve existing config keys (e.g. hotkeys) not present in this payload
+    let existingCfg = {};
+    if (fs.existsSync(configPath)) {
+      try { existingCfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
+    }
+    const merged = { ...existingCfg, ...settings };
+    // Always sync in-memory hotkeys so they're never lost
+    merged.hotkeys = hotkeys;
+
+    await fs.promises.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
     event.reply('save-settings-response', { ok: true });
   } catch (err) {
     console.error('Error saving settings:', err);

@@ -558,8 +558,6 @@
         </div>
       {/if}
     {/if}
-  </div>
-</main>
 
     <!-- Footer Status Bar -->
     <footer>
@@ -573,10 +571,11 @@
         <span class="status-badge recording">Recording {activeRecordings.size} app(s)</span>
       {/if}
       <span class="spacer"></span>
-      <span class="version">v1.7.0 Stable</span>
+      <span class="version">v1.9.0</span>
     </footer>
   </div>
 </main>
+
 
 <style>
   :root {
