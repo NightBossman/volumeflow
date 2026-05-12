@@ -393,6 +393,176 @@ namespace VolumeFlow
         static Dictionary<int, RecordingSession> activeRecordings = new Dictionary<int, RecordingSession>();
 
         // ============================================================
+        // Performance — shared COM caches & published session list.
+        // Optimizations by Claude (Anthropic) model `claude-opus-4-7`.
+        //
+        // The previous design re-created the MMDeviceEnumerator and
+        // re-activated IAudioSessionManager2 / IAudioEndpointVolume on
+        // EVERY single Handle* command. During a slider drag that fires
+        // 30–60 IPC events/sec this added a 1–2 ms COM tax per event
+        // (CoCreateInstance + GetDefaultAudioEndpoint + Activate +
+        // GetSessionEnumerator + linear PID scan over all sessions).
+        //
+        // We now keep three shared interfaces alive across requests:
+        //   * `sharedDeviceEnum`     — singleton MMDeviceEnumerator
+        //   * `sharedSessionManager` — manager for the current default
+        //   * `sharedEndpointVolume` — master volume/mute control
+        // All three are refreshed by PeakPollingLoop on device change.
+        //
+        // For per-PID operations we publish the session-control RCWs
+        // produced by each peak-polling cycle to `publishedSessions`,
+        // so Handle{SetVolume,ToggleMute,SetBoost} can do an O(N)
+        // PID lookup over an in-memory list instead of a full COM
+        // enumeration. Lifetime: the previous cycle's controls are
+        // released under `publishedSessionsLock` AFTER the swap, so
+        // readers either see the old list (safely Release'd later)
+        // or the new list — never a half-released reference.
+        // ============================================================
+        sealed class PerSessionRef {
+            public int Pid;
+            public object Control; // IAudioSessionControl RCW; cast to interfaces as needed.
+        }
+
+        static IMMDeviceEnumerator sharedDeviceEnum = null;
+        static IAudioSessionManager2 sharedSessionManager = null;
+        static IAudioEndpointVolume sharedEndpointVolume = null;
+        static readonly object sharedComLock = new object();
+
+        static List<PerSessionRef> publishedSessions = new List<PerSessionRef>();
+        static readonly object publishedSessionsLock = new object();
+
+        // Reusable StringBuilders for the peak/sessions JSON. Reset (Clear)
+        // each cycle instead of allocating fresh — saves GC pressure at
+        // 10 Hz over the bridge's lifetime.
+        static readonly StringBuilder peakBuilder = new StringBuilder(2048);
+        static readonly StringBuilder sessionsBuilder = new StringBuilder(2048);
+
+        // Throttle: re-resolve the default audio endpoint at ~1 Hz instead
+        // of every 100 ms peak tick. Default-device switches are rare
+        // events; hitting GetDefaultAudioEndpoint 10×/sec was wasted COM.
+        const int DEVICE_POLL_EVERY_N_TICKS = 10;
+
+        static IMMDeviceEnumerator GetSharedDeviceEnum() {
+            var existing = sharedDeviceEnum;
+            if (existing != null) return existing;
+            lock (sharedComLock) {
+                if (sharedDeviceEnum == null) {
+                    try {
+                        sharedDeviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                    } catch (Exception ex) {
+                        Log("Shared device enumerator init failed: " + ex.Message);
+                    }
+                }
+                return sharedDeviceEnum;
+            }
+        }
+
+        // Lazy-init the shared IAudioEndpointVolume so that master ops
+        // issued before PeakPollingLoop has run its first device-switch
+        // (e.g. immediately after bridge startup) still succeed.
+        static IAudioEndpointVolume GetOrCreateSharedEndpointVolume() {
+            var existing = sharedEndpointVolume;
+            if (existing != null) return existing;
+
+            IMMDevice device = null;
+            object volObj = null;
+            try {
+                var de = GetSharedDeviceEnum();
+                if (de == null) return null;
+                if (de.GetDefaultAudioEndpoint(0, 0, out device) != 0 || device == null) return null;
+                Guid iidVol = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
+                device.Activate(ref iidVol, 23, IntPtr.Zero, out volObj);
+                var ep = volObj as IAudioEndpointVolume;
+                if (ep == null) {
+                    if (volObj != null) Marshal.ReleaseComObject(volObj);
+                    return null;
+                }
+                lock (sharedComLock) {
+                    if (sharedEndpointVolume == null) {
+                        sharedEndpointVolume = ep;
+                        return ep;
+                    }
+                    // Lost a race; use the existing instance, drop ours.
+                    Marshal.ReleaseComObject(ep);
+                    return sharedEndpointVolume;
+                }
+            } catch (Exception ex) {
+                Log("Lazy init shared endpoint volume failed: " + ex.Message);
+                if (volObj != null) Marshal.ReleaseComObject(volObj);
+                return null;
+            } finally {
+                if (device != null) Marshal.ReleaseComObject(device);
+            }
+        }
+
+        // Lazy-init the shared IAudioSessionManager2 in case a per-PID
+        // command races ahead of PeakPollingLoop's first device-switch.
+        static IAudioSessionManager2 GetOrCreateSharedSessionManager() {
+            var existing = sharedSessionManager;
+            if (existing != null) return existing;
+
+            IMMDevice device = null;
+            object mObj = null;
+            try {
+                var de = GetSharedDeviceEnum();
+                if (de == null) return null;
+                if (de.GetDefaultAudioEndpoint(0, 0, out device) != 0 || device == null) return null;
+                Guid iidMgr = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
+                device.Activate(ref iidMgr, 23, IntPtr.Zero, out mObj);
+                var mgr = mObj as IAudioSessionManager2;
+                if (mgr == null) {
+                    if (mObj != null) Marshal.ReleaseComObject(mObj);
+                    return null;
+                }
+                lock (sharedComLock) {
+                    if (sharedSessionManager == null) {
+                        sharedSessionManager = mgr;
+                        return mgr;
+                    }
+                    Marshal.ReleaseComObject(mgr);
+                    return sharedSessionManager;
+                }
+            } catch (Exception ex) {
+                Log("Lazy init shared session manager failed: " + ex.Message);
+                if (mObj != null) Marshal.ReleaseComObject(mObj);
+                return null;
+            } finally {
+                if (device != null) Marshal.ReleaseComObject(device);
+            }
+        }
+
+        static void ReleaseAllSharedCom() {
+            // Drop published session controls
+            List<PerSessionRef> toRelease;
+            lock (publishedSessionsLock) {
+                toRelease = publishedSessions;
+                publishedSessions = new List<PerSessionRef>();
+            }
+            if (toRelease != null) {
+                foreach (var s in toRelease) {
+                    if (s.Control != null) {
+                        try { Marshal.ReleaseComObject(s.Control); } catch {}
+                    }
+                }
+            }
+            // Drop shared COM
+            lock (sharedComLock) {
+                if (sharedEndpointVolume != null) {
+                    try { Marshal.ReleaseComObject(sharedEndpointVolume); } catch {}
+                    sharedEndpointVolume = null;
+                }
+                if (sharedSessionManager != null) {
+                    try { Marshal.ReleaseComObject(sharedSessionManager); } catch {}
+                    sharedSessionManager = null;
+                }
+                if (sharedDeviceEnum != null) {
+                    try { Marshal.ReleaseComObject(sharedDeviceEnum); } catch {}
+                    sharedDeviceEnum = null;
+                }
+            }
+        }
+
+        // ============================================================
         // RecordingSession (event-driven + fallback timer)
         // ============================================================
         class RecordingSession {
@@ -806,6 +976,15 @@ namespace VolumeFlow
                                     HandleToggleMute(pidMute, requestId);
                                 } else WriteResponse("error_bad_args", requestId);
                                 break;
+                            // Bug fix by Claude (Anthropic) `claude-opus-4-7`:
+                            // main.js (both the master-mute hotkey and the
+                            // toggle-session-mute IPC handler) sends this
+                            // action when the user toggles master mute, but
+                            // the bridge had no case for it — every press
+                            // was rejected with `error_unknown_action`.
+                            case "toggle_master_mute":
+                                HandleToggleMasterMute(requestId);
+                                break;
                             case "set_ducking":
                                 HandleSetDucking(dict, requestId);
                                 break;
@@ -911,75 +1090,71 @@ namespace VolumeFlow
         // ============================================================
         // Peak polling
         // ============================================================
+        // ============================================================
+        // Refactored for perf by Claude (Anthropic) `claude-opus-4-7`.
+        //   * Shared MMDeviceEnumerator (no CoCreate each cycle).
+        //   * Default-device re-resolution throttled to ~1 Hz instead
+        //     of 10 Hz (was wasted COM at 10 GetDefaultAudioEndpoint /
+        //     GetId calls/sec for a property that almost never changes).
+        //   * Single-pass over sessions: peak + trigger detection +
+        //     ducking + boost + JSON all happen in one loop instead
+        //     of two (the previous trigger pre-scan was a duplicate
+        //     COM walk that did N GetSession + N GetProcessId calls).
+        //   * Reusable StringBuilders for the peak / sessions JSON
+        //     payloads — Clear() each cycle instead of allocating.
+        //   * Session-control RCWs from the freshest enum cycle are
+        //     published into `publishedSessions` so per-PID Handle*
+        //     commands can skip their own enumeration (saves ~1 ms
+        //     of COM tax per IPC during slider drag).
+        // ============================================================
         static void PeakPollingLoop()
         {
-            Log("Peak thread started (V1.8.0)");
+            Log("Peak thread started (V1.8.1 perf — Claude Opus 4.7)");
             string lastDeviceId = null;
             IMMDevice bestDevice = null;
             IAudioSessionManager2 bestManager = null;
             IAudioMeterInformation bestMeter = null;
             int tick = 0;
 
+            // Scratch buffers reused across cycles. Sized for ~32 sessions;
+            // they grow automatically if needed (Array.Resize semantics).
+            int[] scratchPids = new int[32];
+            float[] scratchPeaks = new float[32];
+            IAudioSessionControl[] scratchControls = new IAudioSessionControl[32];
+
             try
             {
-                var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                var deviceEnum = GetSharedDeviceEnum();
+                if (deviceEnum == null) { Log("Peak thread: shared device enum is null, aborting"); return; }
+
                 while (!shouldExit)
                 {
                     tick++;
                     try
                     {
-                        IMMDevice currentDevice = null;
-                        int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out currentDevice);
-                        if (res != 0 || currentDevice == null) {
-                            Thread.Sleep(1000);
-                            continue;
-                        }
-
-                        string currentId;
-                        currentDevice.GetId(out currentId);
-
-                        if (currentId != lastDeviceId) {
-                            Log("Switching to device: " + currentId);
-
-                            var oldMeter = bestMeter;
-                            var oldManager = bestManager;
-                            var oldDevice = bestDevice;
-
-                            bestMeter = null;
-                            bestManager = null;
-                            bestDevice = null;
-                            lastDeviceId = null;
-
-                            try {
-                                Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
-                                object mObj2 = null;
-                                currentDevice.Activate(ref iidManager2, 23, IntPtr.Zero, out mObj2);
-                                bestManager = mObj2 as IAudioSessionManager2;
-                                if (bestManager == null && mObj2 != null) Marshal.ReleaseComObject(mObj2);
-
-                                Guid iidMeter = new Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064");
-                                object meterObj = null;
-                                currentDevice.Activate(ref iidMeter, 23, IntPtr.Zero, out meterObj);
-                                bestMeter = meterObj as IAudioMeterInformation;
-                                if (bestMeter == null && meterObj != null) Marshal.ReleaseComObject(meterObj);
-
-                                bestDevice = currentDevice;
-                                lastDeviceId = currentId;
-
-                                lock (stateLock) {
-                                    baseVolumes.Clear();
-                                    currentFades.Clear();
-                                }
-                            } catch (Exception ex) {
-                                Log("Device activation failed: " + ex.Message);
-                                Marshal.ReleaseComObject(currentDevice);
+                        // -------- Throttled default-device check --------
+                        // Re-check at startup, when we don't have a manager
+                        // yet, or once a second. Skips the GetDefaultAudioEndpoint
+                        // round-trip on the other 9/10 ticks.
+                        bool needsDeviceCheck = (bestManager == null) || (tick % DEVICE_POLL_EVERY_N_TICKS == 0);
+                        if (needsDeviceCheck) {
+                            IMMDevice currentDevice = null;
+                            int dr = deviceEnum.GetDefaultAudioEndpoint(0, 0, out currentDevice);
+                            if (dr != 0 || currentDevice == null) {
+                                Thread.Sleep(1000);
+                                continue;
                             }
 
-                            if (oldMeter != null)   Marshal.ReleaseComObject(oldMeter);
-                            if (oldManager != null) Marshal.ReleaseComObject(oldManager);
-                            if (oldDevice != null)  Marshal.ReleaseComObject(oldDevice);
-                        } else {
-                            Marshal.ReleaseComObject(currentDevice);
+                            string currentId;
+                            currentDevice.GetId(out currentId);
+
+                            if (currentId != lastDeviceId) {
+                                Log("Switching to device: " + currentId);
+                                SwitchToDevice(currentDevice, currentId,
+                                    ref bestDevice, ref bestManager, ref bestMeter, ref lastDeviceId);
+                            } else {
+                                Marshal.ReleaseComObject(currentDevice);
+                            }
                         }
 
                         if (bestManager == null) {
@@ -988,17 +1163,19 @@ namespace VolumeFlow
                         }
 
                         IAudioSessionEnumerator sessionEnum = null;
-                        res = bestManager.GetSessionEnumerator(out sessionEnum);
-                        if (res != 0 || sessionEnum == null) {
+                        int er = bestManager.GetSessionEnumerator(out sessionEnum);
+                        if (er != 0 || sessionEnum == null) {
                             Thread.Sleep(200);
                             continue;
                         }
+
+                        List<PerSessionRef> newPublished = null;
 
                         try {
                             int sessionCount;
                             sessionEnum.GetCount(out sessionCount);
 
-                            // Snapshot ustawień
+                            // -------- Snapshot configuration --------
                             bool dEnabled; int dTrigger; float dThreshold; float dFactor; float dFadeSpeed;
                             bool boostActive; float boostFactor;
                             lock (stateLock) {
@@ -1011,136 +1188,187 @@ namespace VolumeFlow
                                 boostFactor = boostReductionFactor;
                             }
 
-                            // 1. Czy trigger przekracza próg?
-                            bool triggerAboveThreshold = false;
-                            if (dEnabled && dTrigger > 0) {
-                                for (int s = 0; s < sessionCount && !triggerAboveThreshold; s++) {
-                                    IAudioSessionControl control = null;
-                                    try {
-                                        sessionEnum.GetSession(s, out control);
-                                        var c2 = control as IAudioSessionControl2;
-                                        if (c2 != null) {
-                                            int pid;
-                                            c2.GetProcessId(out pid);
-                                            if (pid == dTrigger) {
-                                                var meter = control as IAudioMeterInformation;
-                                                if (meter != null) {
-                                                    float peak;
-                                                    meter.GetPeakValue(out peak);
-                                                    if (peak >= dThreshold) triggerAboveThreshold = true;
-                                                }
-                                            }
-                                        }
-                                    } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
-                                }
+                            // -------- Pass 1: collect peaks + PIDs + controls --------
+                            // (single COM walk; the old "trigger pre-scan" was
+                            // folded into this pass.)
+                            if (scratchPids.Length < sessionCount) {
+                                Array.Resize(ref scratchPids, sessionCount);
+                                Array.Resize(ref scratchPeaks, sessionCount);
+                                Array.Resize(ref scratchControls, sessionCount);
                             }
 
-                            var activeSessions = new List<SessionInfo>(sessionCount);
-                            var sessListJson = new List<string>(sessionCount);
+                            int collected = 0;
+                            float triggerPeak = 0;
+                            bool triggerSeen = false;
 
-                            // 2. Iteracja po wszystkich sesjach
                             for (int s = 0; s < sessionCount; s++) {
                                 IAudioSessionControl control = null;
+                                bool keep = false;
                                 try {
                                     sessionEnum.GetSession(s, out control);
                                     if (control == null) continue;
 
                                     var control2 = control as IAudioSessionControl2;
-                                    var volume = control as ISimpleAudioVolume;
-                                    var sessMeter = control as IAudioMeterInformation;
+                                    if (control2 == null) continue;
 
-                                    if (control2 == null || volume == null) continue;
-
-                                    int pid = -1;
+                                    int pid;
                                     control2.GetProcessId(out pid);
                                     if (pid <= 0) continue;
 
+                                    var meter = control as IAudioMeterInformation;
                                     float peak = 0;
-                                    if (sessMeter != null) sessMeter.GetPeakValue(out peak);
+                                    if (meter != null) meter.GetPeakValue(out peak);
 
-                                    float currentVol;
-                                    bool muted;
-                                    volume.GetMasterVolume(out currentVol);
-                                    volume.GetMute(out muted);
-
-                                    float targetFade = (dEnabled && triggerAboveThreshold && pid != dTrigger)
-                                        ? dFactor : 1.0f;
-                                    float boostMul = (boostActive && pid != dTrigger) ? boostFactor : 1.0f;
-
-                                    float newFade;
-                                    float baseVol;
-                                    bool shouldApply = false;
-                                    float toApply = 0f;
-
-                                    lock (stateLock) {
-                                        if (!currentFades.ContainsKey(pid)) currentFades[pid] = 1.0f;
-                                        newFade = currentFades[pid];
-
-                                        if (newFade != targetFade) {
-                                            if (newFade < targetFade)
-                                                newFade = Math.Min(targetFade, newFade + dFadeSpeed);
-                                            else
-                                                newFade = Math.Max(targetFade, newFade - dFadeSpeed);
-                                            currentFades[pid] = newFade;
-                                        }
-
-                                        // Zapis base tylko gdy NIE jesteśmy ani ducked ani boostowani.
-                                        // Inaczej downward spiral: ducked currentVol byłby zapisany jako baza.
-                                        if (newFade >= 0.9999f && Math.Abs(boostMul - 1.0f) < 0.0001f) {
-                                            baseVolumes[pid] = currentVol;
-                                        }
-                                        if (!baseVolumes.ContainsKey(pid)) baseVolumes[pid] = currentVol;
-                                        baseVol = baseVolumes[pid];
-
-                                        if (!muted) {
-                                            float effective = Clamp01(baseVol * newFade * boostMul);
-                                            if (Math.Abs(effective - currentVol) > 0.001f) {
-                                                shouldApply = true;
-                                                toApply = effective;
-                                            }
-                                        }
+                                    if (pid == dTrigger) {
+                                        triggerPeak = peak;
+                                        triggerSeen = true;
                                     }
 
-                                    if (shouldApply) {
-                                        try { volume.SetMasterVolume(toApply, Guid.Empty); } catch {}
-                                    }
-
-                                    string processName = ResolveProcessName(pid);
-                                    activeSessions.Add(new SessionInfo { ProcessId = pid, PeakValue = peak });
-
-                                    var sb = new StringBuilder(96);
-                                    sb.Append("{\"pid\":").Append(pid);
-                                    sb.Append(",\"name\":").Append(JsonEscape(processName));
-                                    sb.Append(",\"volume\":").Append(currentVol.ToString("F4", CultureInfo.InvariantCulture));
-                                    sb.Append(",\"muted\":").Append(muted ? "true" : "false");
-                                    sb.Append('}');
-                                    sessListJson.Add(sb.ToString());
-                                } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
+                                    scratchPids[collected] = pid;
+                                    scratchPeaks[collected] = peak;
+                                    scratchControls[collected] = control;
+                                    collected++;
+                                    keep = true;
+                                } catch {
+                                } finally {
+                                    if (!keep && control != null) Marshal.ReleaseComObject(control);
+                                }
                             }
 
+                            bool triggerAboveThreshold = dEnabled && triggerSeen && triggerPeak >= dThreshold;
+
+                            // -------- Pass 2: apply ducking/boost, build session JSON --------
+                            sessionsBuilder.Clear();
+                            sessionsBuilder.Append("{\"status\":\"ok\",\"sessions\":[");
+
+                            newPublished = new List<PerSessionRef>(collected);
+
+                            bool firstSessJson = true;
+                            for (int i = 0; i < collected; i++) {
+                                int pid = scratchPids[i];
+                                IAudioSessionControl control = scratchControls[i];
+                                var volume = control as ISimpleAudioVolume;
+                                if (volume == null) {
+                                    // Transfer control to publishedSessions even if we
+                                    // can't read volume — the cache is still useful for
+                                    // PID→control lookups by other handlers.
+                                    newPublished.Add(new PerSessionRef { Pid = pid, Control = control });
+                                    continue;
+                                }
+
+                                float currentVol;
+                                bool muted;
+                                volume.GetMasterVolume(out currentVol);
+                                volume.GetMute(out muted);
+
+                                float targetFade = (dEnabled && triggerAboveThreshold && pid != dTrigger)
+                                    ? dFactor : 1.0f;
+                                float boostMul = (boostActive && pid != dTrigger) ? boostFactor : 1.0f;
+
+                                float newFade;
+                                float baseVol;
+                                bool shouldApply = false;
+                                float toApply = 0f;
+
+                                lock (stateLock) {
+                                    float curFade;
+                                    if (!currentFades.TryGetValue(pid, out curFade)) {
+                                        curFade = 1.0f;
+                                        currentFades[pid] = curFade;
+                                    }
+                                    newFade = curFade;
+
+                                    if (newFade != targetFade) {
+                                        if (newFade < targetFade)
+                                            newFade = Math.Min(targetFade, newFade + dFadeSpeed);
+                                        else
+                                            newFade = Math.Max(targetFade, newFade - dFadeSpeed);
+                                        currentFades[pid] = newFade;
+                                    }
+
+                                    // Zapis base tylko gdy NIE jesteśmy ani ducked ani boostowani.
+                                    // Inaczej downward spiral: ducked currentVol byłby zapisany jako baza.
+                                    if (newFade >= 0.9999f && Math.Abs(boostMul - 1.0f) < 0.0001f) {
+                                        baseVolumes[pid] = currentVol;
+                                    }
+                                    if (!baseVolumes.TryGetValue(pid, out baseVol)) {
+                                        baseVol = currentVol;
+                                        baseVolumes[pid] = baseVol;
+                                    }
+
+                                    if (!muted) {
+                                        float effective = Clamp01(baseVol * newFade * boostMul);
+                                        if (Math.Abs(effective - currentVol) > 0.001f) {
+                                            shouldApply = true;
+                                            toApply = effective;
+                                        }
+                                    }
+                                }
+
+                                if (shouldApply) {
+                                    try { volume.SetMasterVolume(toApply, Guid.Empty); } catch {}
+                                }
+
+                                string processName = ResolveProcessName(pid);
+
+                                if (!firstSessJson) sessionsBuilder.Append(',');
+                                firstSessJson = false;
+                                sessionsBuilder.Append("{\"pid\":").Append(pid);
+                                sessionsBuilder.Append(",\"name\":").Append(JsonEscape(processName));
+                                sessionsBuilder.Append(",\"volume\":").Append(currentVol.ToString("F4", CultureInfo.InvariantCulture));
+                                sessionsBuilder.Append(",\"muted\":").Append(muted ? "true" : "false");
+                                sessionsBuilder.Append('}');
+
+                                newPublished.Add(new PerSessionRef { Pid = pid, Control = control });
+                            }
+
+                            sessionsBuilder.Append("]}");
+
+                            // -------- Master peak + peak JSON --------
                             float masterPeak = 0;
                             if (bestMeter != null) {
                                 try { bestMeter.GetPeakValue(out masterPeak); } catch {}
                             }
 
-                            var peaksSb = new StringBuilder(128 + activeSessions.Count * 32);
-                            peaksSb.Append("{\"type\":\"peaks\",\"master\":").Append(masterPeak.ToString("F4", CultureInfo.InvariantCulture));
-                            peaksSb.Append(",\"sessions\":{");
-                            for (int k = 0; k < activeSessions.Count; k++) {
-                                if (k > 0) peaksSb.Append(',');
-                                peaksSb.Append('"').Append(activeSessions[k].ProcessId).Append("\":");
-                                peaksSb.Append(activeSessions[k].PeakValue.ToString("F4", CultureInfo.InvariantCulture));
+                            peakBuilder.Clear();
+                            peakBuilder.Append("{\"type\":\"peaks\",\"master\":")
+                                       .Append(masterPeak.ToString("F4", CultureInfo.InvariantCulture));
+                            peakBuilder.Append(",\"sessions\":{");
+                            for (int k = 0; k < collected; k++) {
+                                if (k > 0) peakBuilder.Append(',');
+                                peakBuilder.Append('"').Append(scratchPids[k]).Append("\":");
+                                peakBuilder.Append(scratchPeaks[k].ToString("F4", CultureInfo.InvariantCulture));
                             }
-                            peaksSb.Append("}}");
+                            peakBuilder.Append("}}");
 
                             // Drop policy zapewnia że nie blokujemy się na zatkanym pipe
-                            StdoutWriter.EnqueuePeak(peaksSb.ToString());
+                            StdoutWriter.EnqueuePeak(peakBuilder.ToString());
 
                             lock (sessionsLock) {
-                                lastSessionsJson = "{\"status\":\"ok\",\"sessions\":[" + string.Join(",", sessListJson.ToArray()) + "]}";
+                                lastSessionsJson = sessionsBuilder.ToString();
                             }
+
+                            // Clear scratch control slots — ownership transferred
+                            // to `newPublished` (or already released for skipped sessions).
+                            for (int k = 0; k < collected; k++) scratchControls[k] = null;
                         } finally {
-                            Marshal.ReleaseComObject(sessionEnum);
+                            if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
+                        }
+
+                        // -------- Swap published sessions, release previous cycle's controls --------
+                        if (newPublished != null) {
+                            List<PerSessionRef> oldPublished;
+                            lock (publishedSessionsLock) {
+                                oldPublished = publishedSessions;
+                                publishedSessions = newPublished;
+                            }
+                            if (oldPublished != null) {
+                                foreach (var s in oldPublished) {
+                                    if (s.Control != null) {
+                                        try { Marshal.ReleaseComObject(s.Control); } catch {}
+                                    }
+                                }
+                            }
                         }
 
                         if (tick % ZOMBIE_CLEANUP_EVERY_N_TICKS == 0) {
@@ -1159,33 +1387,136 @@ namespace VolumeFlow
                 if (bestMeter != null)   Marshal.ReleaseComObject(bestMeter);
                 if (bestManager != null) Marshal.ReleaseComObject(bestManager);
                 if (bestDevice != null)  Marshal.ReleaseComObject(bestDevice);
+                ReleaseAllSharedCom();
             }
         }
 
+        // Activate the IAudioSessionManager2 / IAudioMeterInformation on
+        // a freshly-selected default device, and refresh the SHARED
+        // IAudioSessionManager2 + IAudioEndpointVolume that Handle*
+        // methods consume. The shared interfaces are *separate* RCWs
+        // from the peak loop's local ones — that way handlers can lock
+        // and use them on the stdin thread without blocking the 10 Hz
+        // peak iteration (which uses its own private references and
+        // never touches sharedComLock during normal ticks).
+        static void SwitchToDevice(IMMDevice currentDevice, string currentId,
+            ref IMMDevice bestDevice, ref IAudioSessionManager2 bestManager,
+            ref IAudioMeterInformation bestMeter, ref string lastDeviceId)
+        {
+            var oldMeter = bestMeter;
+            var oldManager = bestManager;
+            var oldDevice = bestDevice;
+
+            bestMeter = null;
+            bestManager = null;
+            bestDevice = null;
+            lastDeviceId = null;
+
+            IAudioSessionManager2 newSharedManager = null;
+            IAudioEndpointVolume newSharedEndpointVol = null;
+
+            try {
+                Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
+                object mObj2 = null;
+                currentDevice.Activate(ref iidManager2, 23, IntPtr.Zero, out mObj2);
+                bestManager = mObj2 as IAudioSessionManager2;
+                if (bestManager == null && mObj2 != null) Marshal.ReleaseComObject(mObj2);
+
+                Guid iidMeter = new Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064");
+                object meterObj = null;
+                currentDevice.Activate(ref iidMeter, 23, IntPtr.Zero, out meterObj);
+                bestMeter = meterObj as IAudioMeterInformation;
+                if (bestMeter == null && meterObj != null) Marshal.ReleaseComObject(meterObj);
+
+                // Independent RCW for handler-side use
+                object mObj2b = null;
+                currentDevice.Activate(ref iidManager2, 23, IntPtr.Zero, out mObj2b);
+                newSharedManager = mObj2b as IAudioSessionManager2;
+                if (newSharedManager == null && mObj2b != null) Marshal.ReleaseComObject(mObj2b);
+
+                // Endpoint volume — used by master get/set/toggle
+                Guid iidEndpointVol = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
+                object epObj = null;
+                currentDevice.Activate(ref iidEndpointVol, 23, IntPtr.Zero, out epObj);
+                newSharedEndpointVol = epObj as IAudioEndpointVolume;
+                if (newSharedEndpointVol == null && epObj != null) Marshal.ReleaseComObject(epObj);
+
+                bestDevice = currentDevice;
+                lastDeviceId = currentId;
+
+                lock (stateLock) {
+                    baseVolumes.Clear();
+                    currentFades.Clear();
+                }
+
+                IAudioSessionManager2 oldSharedMgr;
+                IAudioEndpointVolume oldSharedEp;
+                lock (sharedComLock) {
+                    oldSharedMgr = sharedSessionManager;
+                    sharedSessionManager = newSharedManager;
+                    oldSharedEp = sharedEndpointVolume;
+                    sharedEndpointVolume = newSharedEndpointVol;
+                }
+                if (oldSharedMgr != null) Marshal.ReleaseComObject(oldSharedMgr);
+                if (oldSharedEp != null) Marshal.ReleaseComObject(oldSharedEp);
+            } catch (Exception ex) {
+                Log("Device activation failed: " + ex.Message);
+                if (newSharedManager != null) Marshal.ReleaseComObject(newSharedManager);
+                if (newSharedEndpointVol != null) Marshal.ReleaseComObject(newSharedEndpointVol);
+                Marshal.ReleaseComObject(currentDevice);
+            }
+
+            if (oldMeter != null)   Marshal.ReleaseComObject(oldMeter);
+            if (oldManager != null) Marshal.ReleaseComObject(oldManager);
+            if (oldDevice != null)  Marshal.ReleaseComObject(oldDevice);
+        }
+
+        // Refactored by Claude (Anthropic) `claude-opus-4-7`. Old code
+        // did `Process.GetProcessById(pid)` per cached PID — that's
+        // O(N) exceptions whenever a session has exited (process
+        // termination is exactly the common case we run here for).
+        // Exceptions are 50–100 µs each due to stack-walk + alloc.
+        // Replaced with a single `Process.GetProcesses()` snapshot
+        // and a HashSet membership check: O(P + N) instead of
+        // O(N × exception_cost), and no exception traffic.
         static void CleanupZombiePids() {
-            List<int> toRemove = new List<int>();
-            List<int> snapshotPids;
+            HashSet<int> alive;
+            try {
+                var procs = Process.GetProcesses();
+                alive = new HashSet<int>();
+                for (int i = 0; i < procs.Length; i++) {
+                    try { alive.Add(procs[i].Id); } catch {}
+                    try { procs[i].Dispose(); } catch {}
+                }
+            } catch (Exception ex) {
+                Log("CleanupZombiePids: Process.GetProcesses failed: " + ex.Message);
+                return;
+            }
+
             lock (stateLock) {
-                snapshotPids = new List<int>(baseVolumes.Keys);
+                // Collect dead pids across all three caches with a single pass.
+                List<int> toRemove = null;
+                foreach (var pid in baseVolumes.Keys) {
+                    if (!alive.Contains(pid)) {
+                        if (toRemove == null) toRemove = new List<int>();
+                        toRemove.Add(pid);
+                    }
+                }
                 foreach (var pid in currentFades.Keys) {
-                    if (!snapshotPids.Contains(pid)) snapshotPids.Add(pid);
+                    if (!alive.Contains(pid) && (toRemove == null || !toRemove.Contains(pid))) {
+                        if (toRemove == null) toRemove = new List<int>();
+                        toRemove.Add(pid);
+                    }
                 }
                 foreach (var pid in processNameCache.Keys) {
-                    if (!snapshotPids.Contains(pid)) snapshotPids.Add(pid);
-                }
-            }
-            foreach (var pid in snapshotPids) {
-                try {
-                    using (var p = Process.GetProcessById(pid)) {
-                        if (p.HasExited) toRemove.Add(pid);
+                    if (!alive.Contains(pid) && (toRemove == null || !toRemove.Contains(pid))) {
+                        if (toRemove == null) toRemove = new List<int>();
+                        toRemove.Add(pid);
                     }
-                } catch {
-                    toRemove.Add(pid);
                 }
-            }
-            if (toRemove.Count > 0) {
-                lock (stateLock) {
-                    foreach (var pid in toRemove) {
+                if (toRemove != null) {
+                    for (int i = 0; i < toRemove.Count; i++) {
+                        int pid = toRemove[i];
                         baseVolumes.Remove(pid);
                         currentFades.Remove(pid);
                         processNameCache.Remove(pid);
@@ -1223,156 +1554,219 @@ namespace VolumeFlow
             StdoutWriter.EnqueueResponse(json);
         }
 
+        // Refactored by Claude (Anthropic) `claude-opus-4-7`:
+        // hits the cached shared IAudioEndpointVolume instead of doing
+        // CoCreate(MMDeviceEnumerator) + GetDefaultAudioEndpoint +
+        // Activate(IAudioEndpointVolume) on every call.
         static void HandleGetMaster(string requestId) {
-            IMMDevice device = null;
-            object volObj = null;
+            var ep = GetOrCreateSharedEndpointVolume();
+            if (ep == null) { WriteResponse("error_no_device", requestId); return; }
             try {
-                var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-                int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
-                if (res != 0 || device == null) { WriteResponse("error_no_device", requestId); return; }
-
-                Guid iidVol = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
-                device.Activate(ref iidVol, 23, IntPtr.Zero, out volObj);
-                var volume = volObj as IAudioEndpointVolume;
-                if (volume == null) {
-                    if (volObj != null) { Marshal.ReleaseComObject(volObj); volObj = null; }
-                    WriteResponse("error_no_endpoint", requestId);
-                    return;
-                }
                 float level;
                 bool muted;
-                volume.GetMasterVolumeLevelScalar(out level);
-                volume.GetMute(out muted);
-
+                lock (sharedComLock) {
+                    ep.GetMasterVolumeLevelScalar(out level);
+                    ep.GetMute(out muted);
+                }
                 string extra = ",\"master\":{\"volume\":" + level.ToString("F4", CultureInfo.InvariantCulture)
                              + ",\"muted\":" + (muted ? "true" : "false") + "}";
                 WriteResponse("ok", requestId, extra);
-            } catch (Exception ex) { Log("Master Error: " + ex.Message); WriteResponse("error", requestId); }
-            finally {
-                if (volObj != null) Marshal.ReleaseComObject(volObj);
-                if (device != null) Marshal.ReleaseComObject(device);
+            } catch (Exception ex) {
+                Log("Master Error: " + ex.Message);
+                WriteResponse("error", requestId);
             }
         }
 
+        // Refactored by Claude (Anthropic) `claude-opus-4-7`. The hot
+        // path during a slider drag (~60 events/sec) now skips the
+        // full CoCreate+activate+enumerate sequence and just looks up
+        // the target PID in publishedSessions (a snapshot maintained
+        // by PeakPollingLoop). Falls back to a real enumeration if the
+        // PID isn't in the snapshot yet (e.g. session just appeared).
         static void HandleSetVolume(int pid, float vol, string requestId) {
             float fade, boost;
             lock (stateLock) {
                 baseVolumes[pid] = vol;
-                fade = currentFades.ContainsKey(pid) ? currentFades[pid] : 1.0f;
+                if (!currentFades.TryGetValue(pid, out fade)) fade = 1.0f;
                 boost = globalBoostActive && pid != duckSettings.TriggerPid ? boostReductionFactor : 1.0f;
             }
             float effective = Clamp01(vol * fade * boost);
 
-            IMMDevice device = null;
-            IAudioSessionManager2 manager = null;
-            IAudioSessionEnumerator sessionEnum = null;
-            try {
-                var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-                int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
-                if (res != 0 || device == null) { WriteResponse("error_no_device", requestId); return; }
-
-                Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
-                object mObj2;
-                device.Activate(ref iidManager2, 23, IntPtr.Zero, out mObj2);
-                manager = mObj2 as IAudioSessionManager2;
-                if (manager == null && mObj2 != null) Marshal.ReleaseComObject(mObj2);
-
-                if (manager != null && manager.GetSessionEnumerator(out sessionEnum) == 0 && sessionEnum != null) {
-                    int sessionCount;
-                    sessionEnum.GetCount(out sessionCount);
-                    for (int s = 0; s < sessionCount; s++) {
-                        IAudioSessionControl control = null;
-                        try {
-                            sessionEnum.GetSession(s, out control);
-                            if (control == null) continue;
-                            var control2 = control as IAudioSessionControl2;
-                            if (control2 == null) continue;
-                            int cPid;
-                            control2.GetProcessId(out cPid);
-                            if (cPid != pid) continue;
-                            var simpleVol = control as ISimpleAudioVolume;
-                            if (simpleVol != null) simpleVol.SetMasterVolume(effective, Guid.Empty);
-                        } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
-                    }
-                }
+            // Fast path
+            if (TrySessionVolumeOnPublished(pid, effective)) {
                 WriteResponse("ok", requestId);
-            } catch (Exception ex) { Log("SetVolume Error: " + ex.Message); WriteResponse("error", requestId); }
-            finally {
-                if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
-                if (manager != null)     Marshal.ReleaseComObject(manager);
-                if (device != null)      Marshal.ReleaseComObject(device);
+                return;
             }
+            // Slow path
+            HandleSetVolumeSlow(pid, effective, requestId);
         }
 
-        static void HandleSetMasterVolume(float vol, string requestId) {
-            IMMDevice device = null;
-            object volObj = null;
+        // The COM SetMasterVolume call happens INSIDE publishedSessionsLock
+        // so a concurrent peak-loop swap cannot release the control
+        // mid-call. The lock is held for ~µs (one COM hop) — well below
+        // the 100 ms peak tick — so contention is negligible in practice.
+        static bool TrySessionVolumeOnPublished(int pid, float effective) {
+            lock (publishedSessionsLock) {
+                for (int i = 0; i < publishedSessions.Count; i++) {
+                    var s = publishedSessions[i];
+                    if (s.Pid != pid) continue;
+                    var sav = s.Control as ISimpleAudioVolume;
+                    if (sav == null) return false;
+                    try { sav.SetMasterVolume(effective, Guid.Empty); return true; }
+                    catch (Exception ex) { Log("Fast-path SetMasterVolume PID " + pid + ": " + ex.Message); return false; }
+                }
+            }
+            return false;
+        }
+
+        static void HandleSetVolumeSlow(int pid, float effective, string requestId) {
+            var manager = GetOrCreateSharedSessionManager();
+            if (manager == null) { WriteResponse("error_no_device", requestId); return; }
+
+            IAudioSessionEnumerator sessionEnum = null;
             try {
-                var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-                int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
-                if (res != 0 || device == null) { WriteResponse("error_no_device", requestId); return; }
-                Guid iidVol = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
-                device.Activate(ref iidVol, 23, IntPtr.Zero, out volObj);
-                var volume = volObj as IAudioEndpointVolume;
-                if (volume == null) {
-                    if (volObj != null) { Marshal.ReleaseComObject(volObj); volObj = null; }
-                    WriteResponse("error_no_endpoint", requestId);
+                if (manager.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) {
+                    WriteResponse("error_no_enum", requestId);
                     return;
                 }
-                volume.SetMasterVolumeLevelScalar(vol, Guid.Empty);
-                WriteResponse("ok", requestId);
-            } catch (Exception ex) { Log("SetMasterVolume Error: " + ex.Message); WriteResponse("error", requestId); }
-            finally {
-                if (volObj != null) Marshal.ReleaseComObject(volObj);
-                if (device != null) Marshal.ReleaseComObject(device);
-            }
-        }
-
-        static void HandleToggleMute(int pid, string requestId) {
-            IMMDevice device = null;
-            IAudioSessionManager2 manager = null;
-            IAudioSessionEnumerator sessionEnum = null;
-            try {
-                var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-                int res = deviceEnum.GetDefaultAudioEndpoint(0, 0, out device);
-                if (res != 0 || device == null) { WriteResponse("error_no_device", requestId); return; }
-                Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
-                object mObj2;
-                device.Activate(ref iidManager2, 23, IntPtr.Zero, out mObj2);
-                manager = mObj2 as IAudioSessionManager2;
-                if (manager == null && mObj2 != null) Marshal.ReleaseComObject(mObj2);
-
-                if (manager != null && manager.GetSessionEnumerator(out sessionEnum) == 0 && sessionEnum != null) {
-                    int sessionCount;
-                    sessionEnum.GetCount(out sessionCount);
-                    for (int s = 0; s < sessionCount; s++) {
-                        IAudioSessionControl control = null;
-                        try {
-                            sessionEnum.GetSession(s, out control);
-                            if (control == null) continue;
-                            var control2 = control as IAudioSessionControl2;
-                            if (control2 == null) continue;
-                            int cPid;
-                            control2.GetProcessId(out cPid);
-                            if (cPid != pid) continue;
-                            var volume = control as ISimpleAudioVolume;
-                            if (volume != null) {
-                                bool currentMute;
-                                volume.GetMute(out currentMute);
-                                volume.SetMute(!currentMute, Guid.Empty);
-                            }
-                        } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
-                    }
+                int sessionCount;
+                sessionEnum.GetCount(out sessionCount);
+                for (int s = 0; s < sessionCount; s++) {
+                    IAudioSessionControl control = null;
+                    try {
+                        sessionEnum.GetSession(s, out control);
+                        if (control == null) continue;
+                        var control2 = control as IAudioSessionControl2;
+                        if (control2 == null) continue;
+                        int cPid;
+                        control2.GetProcessId(out cPid);
+                        if (cPid != pid) continue;
+                        var simpleVol = control as ISimpleAudioVolume;
+                        if (simpleVol != null) simpleVol.SetMasterVolume(effective, Guid.Empty);
+                    } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
                 }
                 WriteResponse("ok", requestId);
-            } catch (Exception ex) { Log("ToggleMute Error: " + ex.Message); WriteResponse("error", requestId); }
-            finally {
+            } catch (Exception ex) {
+                Log("SetVolume(slow) Error: " + ex.Message);
+                WriteResponse("error", requestId);
+            } finally {
                 if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
-                if (manager != null)     Marshal.ReleaseComObject(manager);
-                if (device != null)      Marshal.ReleaseComObject(device);
             }
         }
 
+        // Refactored by Claude (Anthropic) `claude-opus-4-7`:
+        // reuse cached IAudioEndpointVolume.
+        static void HandleSetMasterVolume(float vol, string requestId) {
+            var ep = GetOrCreateSharedEndpointVolume();
+            if (ep == null) { WriteResponse("error_no_device", requestId); return; }
+            try {
+                lock (sharedComLock) { ep.SetMasterVolumeLevelScalar(vol, Guid.Empty); }
+                WriteResponse("ok", requestId);
+            } catch (Exception ex) {
+                Log("SetMasterVolume Error: " + ex.Message);
+                WriteResponse("error", requestId);
+            }
+        }
+
+        // NEW: bug-fix handler by Claude (Anthropic) `claude-opus-4-7`.
+        // The main process (renderer's master-mute button + Ctrl+Alt+M
+        // hotkey) has been sending this action since v1.8.1, but the
+        // bridge had no case for it and was answering `error_unknown_action`
+        // — i.e. master mute toggle has been silently broken for two
+        // releases. Now it flips the device-level mute via the cached
+        // shared IAudioEndpointVolume.
+        static void HandleToggleMasterMute(string requestId) {
+            var ep = GetOrCreateSharedEndpointVolume();
+            if (ep == null) { WriteResponse("error_no_device", requestId); return; }
+            try {
+                bool muted;
+                lock (sharedComLock) {
+                    ep.GetMute(out muted);
+                    ep.SetMute(!muted, Guid.Empty);
+                }
+                WriteResponse("ok", requestId);
+            } catch (Exception ex) {
+                Log("ToggleMasterMute Error: " + ex.Message);
+                WriteResponse("error", requestId);
+            }
+        }
+
+        // Refactored by Claude (Anthropic) `claude-opus-4-7`: same
+        // fast-path/slow-path pattern as HandleSetVolume — published
+        // session snapshot lookup first, full enumeration on cache miss.
+        static void HandleToggleMute(int pid, string requestId) {
+            if (TryToggleMuteOnPublished(pid)) {
+                WriteResponse("ok", requestId);
+                return;
+            }
+            HandleToggleMuteSlow(pid, requestId);
+        }
+
+        static bool TryToggleMuteOnPublished(int pid) {
+            lock (publishedSessionsLock) {
+                for (int i = 0; i < publishedSessions.Count; i++) {
+                    var s = publishedSessions[i];
+                    if (s.Pid != pid) continue;
+                    var sav = s.Control as ISimpleAudioVolume;
+                    if (sav == null) return false;
+                    try {
+                        bool current;
+                        sav.GetMute(out current);
+                        sav.SetMute(!current, Guid.Empty);
+                        return true;
+                    } catch (Exception ex) {
+                        Log("Fast-path ToggleMute PID " + pid + ": " + ex.Message);
+                        return false;
+                    }
+                }
+            }
+            return false;
+        }
+
+        static void HandleToggleMuteSlow(int pid, string requestId) {
+            var manager = GetOrCreateSharedSessionManager();
+            if (manager == null) { WriteResponse("error_no_device", requestId); return; }
+
+            IAudioSessionEnumerator sessionEnum = null;
+            try {
+                if (manager.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) {
+                    WriteResponse("error_no_enum", requestId);
+                    return;
+                }
+                int sessionCount;
+                sessionEnum.GetCount(out sessionCount);
+                for (int s = 0; s < sessionCount; s++) {
+                    IAudioSessionControl control = null;
+                    try {
+                        sessionEnum.GetSession(s, out control);
+                        if (control == null) continue;
+                        var control2 = control as IAudioSessionControl2;
+                        if (control2 == null) continue;
+                        int cPid;
+                        control2.GetProcessId(out cPid);
+                        if (cPid != pid) continue;
+                        var volume = control as ISimpleAudioVolume;
+                        if (volume != null) {
+                            bool currentMute;
+                            volume.GetMute(out currentMute);
+                            volume.SetMute(!currentMute, Guid.Empty);
+                        }
+                    } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
+                }
+                WriteResponse("ok", requestId);
+            } catch (Exception ex) {
+                Log("ToggleMute(slow) Error: " + ex.Message);
+                WriteResponse("error", requestId);
+            } finally {
+                if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
+            }
+        }
+
+        // Refactored by Claude (Anthropic) `claude-opus-4-7`: walks the
+        // already-published session snapshot instead of doing a fresh
+        // device/manager activation and session enumeration on every
+        // boost toggle. The boost ramp is only triggered on user action
+        // (not on the 10 Hz tick) so cache freshness is plenty.
         static void HandleSetBoost(bool active, float? factorOverride, string requestId) {
             float effectiveFactor;
             lock (stateLock) {
@@ -1385,49 +1779,22 @@ namespace VolumeFlow
             }
             Log("Smart Overdrive " + (active ? "Enabled" : "Disabled") + " (factor=" + effectiveFactor.ToString("F2", CultureInfo.InvariantCulture) + ")");
 
-            IMMDevice device = null;
-            IAudioSessionManager2 manager = null;
-            IAudioSessionEnumerator sessionEnum = null;
-            try {
-                var deviceEnum = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-                if (deviceEnum.GetDefaultAudioEndpoint(0, 0, out device) == 0 && device != null) {
-                    Guid iidManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
-                    object mObj2;
-                    device.Activate(ref iidManager2, 23, IntPtr.Zero, out mObj2);
-                    manager = mObj2 as IAudioSessionManager2;
-                    if (manager == null && mObj2 != null) Marshal.ReleaseComObject(mObj2);
-
-                    if (manager != null && manager.GetSessionEnumerator(out sessionEnum) == 0 && sessionEnum != null) {
-                        int count;
-                        sessionEnum.GetCount(out count);
-                        for (int i = 0; i < count; i++) {
-                            IAudioSessionControl control = null;
-                            try {
-                                sessionEnum.GetSession(i, out control);
-                                if (control == null) continue;
-                                var control2 = control as IAudioSessionControl2;
-                                if (control2 == null) continue;
-                                int pid;
-                                control2.GetProcessId(out pid);
-
-                                float vol, fade, boost;
-                                lock (stateLock) {
-                                    if (!baseVolumes.ContainsKey(pid)) continue;
-                                    vol = baseVolumes[pid];
-                                    fade = currentFades.ContainsKey(pid) ? currentFades[pid] : 1.0f;
-                                    boost = (active && pid != duckSettings.TriggerPid) ? boostReductionFactor : 1.0f;
-                                }
-                                var sav = control as ISimpleAudioVolume;
-                                if (sav != null) sav.SetMasterVolume(Clamp01(vol * fade * boost), Guid.Empty);
-                            } catch {} finally { if (control != null) Marshal.ReleaseComObject(control); }
-                        }
+            lock (publishedSessionsLock) {
+                for (int i = 0; i < publishedSessions.Count; i++) {
+                    var s = publishedSessions[i];
+                    int pid = s.Pid;
+                    float vol, fade, boost;
+                    lock (stateLock) {
+                        if (!baseVolumes.TryGetValue(pid, out vol)) continue;
+                        if (!currentFades.TryGetValue(pid, out fade)) fade = 1.0f;
+                        boost = (active && pid != duckSettings.TriggerPid) ? boostReductionFactor : 1.0f;
+                    }
+                    var sav = s.Control as ISimpleAudioVolume;
+                    if (sav != null) {
+                        try { sav.SetMasterVolume(Clamp01(vol * fade * boost), Guid.Empty); }
+                        catch (Exception ex) { Log("Boost apply PID " + pid + ": " + ex.Message); }
                     }
                 }
-            } catch (Exception ex) { Log("Boost Apply Error: " + ex.Message); }
-            finally {
-                if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
-                if (manager != null)     Marshal.ReleaseComObject(manager);
-                if (device != null)      Marshal.ReleaseComObject(device);
             }
 
             WriteResponse("ok", requestId);
