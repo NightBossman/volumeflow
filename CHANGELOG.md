@@ -2,6 +2,21 @@
 
 Wszystkie istotne zmiany w tym projekcie będą dokumentowane w tym pliku.
 
+## [1.8.1] - 2026-05-12
+### Dodano
+- **Global Hotkeys**: System skrótów klawiszowych działających w całym systemie (niezależnie od fokusa okna).
+  - `Ctrl+Alt+R` — Rozpocznij / Zatrzymaj nagrywanie aktywnej sesji audio.
+  - `Ctrl+Alt+M` — Wycisz / Odcisz wyjście master systemu.
+  - `Ctrl+Alt+B` — Włącz / Wyłącz Smart Overdrive.
+- **Edytor hotkeys w UI**: Nowa sekcja "Global Hotkeys" w zakładce Settings pozwala na rebinding skrótów bez restartowania aplikacji.
+- **OSD przy hotkey**: Każde naciśnięcie globalnego skrótu wyświetla powiadomienie OSD z informacją o akcji.
+- **Synchronizacja stanu**: Zmiany wywołane hotkey (nagrywanie, boost) są natychmiast odzwierciedlane w interfejsie.
+
+### Ulepszono
+- Skróty są persystowane w `config.json` i ładowane przy starcie.
+- Walidacja bezpieczeństwa nowo przypisanych skrótów po stronie procesu głównego.
+
+---
 ## [1.7.0] - 2026-05-11
 ### Dodano
 - **System OSD (On-Screen Display)**: Nowoczesne powiadomienia w rogu ekranu informujące o rozpoczęciu i zakończeniu nagrywania.

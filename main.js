@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, globalShortcut } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
@@ -16,6 +16,93 @@ let mainWindow = null;
 let osdWindow = null;
 let tray = null;
 let isQuitting = false;
+
+// ============================================================
+// Global Hotkeys
+// ============================================================
+
+// Default hotkey configuration — saved/loaded from config
+let hotkeys = {
+  toggleRecording: 'Ctrl+Alt+R',
+  toggleMasterMute: 'Ctrl+Alt+M',
+  toggleBoost: 'Ctrl+Alt+B',
+};
+
+// pid last used for recording via hotkey
+let hotkeyRecordingPid = null;
+
+// Shared boost state — synced between UI and hotkey
+let hotkeyBoostState = false;
+
+function registerHotkeys() {
+  globalShortcut.unregisterAll();
+
+  // Toggle master mute
+  if (hotkeys.toggleMasterMute) {
+    const ok = globalShortcut.register(hotkeys.toggleMasterMute, async () => {
+      await sendBridgeCommand({ action: 'toggle_master_mute' });
+      showOSD('Master Mute toggled', 'mute');
+    });
+    if (!ok) console.warn('[Hotkeys] Failed to register:', hotkeys.toggleMasterMute);
+  }
+
+  // Toggle Smart Overdrive
+  if (hotkeys.toggleBoost) {
+    const ok = globalShortcut.register(hotkeys.toggleBoost, async () => {
+      hotkeyBoostState = !hotkeyBoostState;
+      await sendBridgeCommand({ action: 'set_boost', active: hotkeyBoostState, factor: 0.6 });
+      showOSD(hotkeyBoostState ? 'Smart Overdrive ON' : 'Smart Overdrive OFF', 'boost');
+      // Sync state to renderer
+      if (mainWindow) mainWindow.webContents.send('hotkey-boost-changed', hotkeyBoostState);
+    });
+    if (!ok) console.warn('[Hotkeys] Failed to register:', hotkeys.toggleBoost);
+  }
+
+  // Toggle recording — records the currently active audio session
+  if (hotkeys.toggleRecording) {
+    const ok = globalShortcut.register(hotkeys.toggleRecording, async () => {
+      const result = await sendBridgeCommand({ action: 'get_sessions' });
+      if (!result || !result.sessions || result.sessions.length === 0) {
+        showOSD('No active audio sessions', 'info');
+        return;
+      }
+      // Toggle recording for first active session (or previously chosen)
+      const target = hotkeyRecordingPid
+        ? result.sessions.find(s => s.pid === hotkeyRecordingPid)
+        : result.sessions[0];
+      if (!target) {
+        // Session disappeared — reset tracking and fall back to first available
+        hotkeyRecordingPid = null;
+        const fallback = result.sessions[0];
+        hotkeyRecordingPid = fallback.pid;
+        await sendBridgeCommand({ action: 'start_recording', pid: fallback.pid });
+        showOSD(`Recording: ${fallback.name}`, 'record');
+        if (mainWindow) mainWindow.webContents.send('hotkey-recording-changed', { pid: fallback.pid, active: true });
+        return;
+      }
+      if (hotkeyRecordingPid) {
+        // Stop recording
+        await sendBridgeCommand({ action: 'stop_recording', pid: target.pid });
+        hotkeyRecordingPid = null;
+        showOSD(`Stopped recording: ${target.name}`, 'stop');
+        if (mainWindow) mainWindow.webContents.send('hotkey-recording-changed', { pid: target.pid, active: false });
+      } else {
+        // Start recording
+        hotkeyRecordingPid = target.pid;
+        await sendBridgeCommand({ action: 'start_recording', pid: target.pid });
+        showOSD(`Recording: ${target.name}`, 'record');
+        if (mainWindow) mainWindow.webContents.send('hotkey-recording-changed', { pid: target.pid, active: true });
+      }
+    });
+    if (!ok) console.warn('[Hotkeys] Failed to register:', hotkeys.toggleRecording);
+  }
+
+  console.log('[Hotkeys] Registered:', Object.entries(hotkeys).map(([k,v]) => `${k}=${v}`).join(', '));
+}
+
+function unregisterHotkeys() {
+  globalShortcut.unregisterAll();
+}
 
 // Polling stats interval
 let healthCheckInterval = null;
@@ -377,6 +464,8 @@ ipcMain.on('set-ducking', (event, data) => {
 });
 
 ipcMain.on('set-boost', (event, data) => {
+  // Sync shared state so hotkey toggle stays in sync with UI
+  if (data.active !== undefined) hotkeyBoostState = data.active;
   sendBridgeCommand({ action: 'set_boost', ...data });
 });
 
@@ -407,12 +496,50 @@ ipcMain.handle('load-settings', () => {
   try {
     if (fs.existsSync(configPath)) {
       const data = fs.readFileSync(configPath, 'utf8');
-      return JSON.parse(data);
+      const cfg = JSON.parse(data);
+      // Restore hotkeys from config
+      if (cfg.hotkeys) {
+        hotkeys = { ...hotkeys, ...cfg.hotkeys };
+        registerHotkeys();
+      }
+      return cfg;
     }
   } catch (err) {
     console.error('Error loading settings:', err);
   }
   return null;
+});
+
+ipcMain.handle('get-hotkeys', () => {
+  return hotkeys;
+});
+
+ipcMain.on('save-hotkeys', (event, newHotkeys) => {
+  try {
+    // Validate — only allow safe Electron accelerator strings
+    const allowed = /^((Ctrl|Alt|Shift|Super)\+)+(F[1-9]|F1[0-2]|[A-Z0-9]|Space|Tab|Escape|Insert|Delete|Home|End|PageUp|PageDown)$/i;
+    for (const [key, val] of Object.entries(newHotkeys)) {
+      if (val && !allowed.test(val)) {
+        console.warn(`[Hotkeys] Rejected invalid accelerator for ${key}: ${val}`);
+        event.returnValue = { ok: false, error: `Invalid accelerator: ${val}` };
+        return;
+      }
+    }
+    hotkeys = { ...hotkeys, ...newHotkeys };
+    registerHotkeys();
+    // Persist alongside other settings
+    let cfg = {};
+    if (fs.existsSync(configPath)) {
+      try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
+    }
+    cfg.hotkeys = hotkeys;
+    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
+    console.log('[Hotkeys] Saved:', hotkeys);
+    event.returnValue = { ok: true };
+  } catch (err) {
+    console.error('[Hotkeys] Save error:', err);
+    event.returnValue = { ok: false, error: err.message };
+  }
 });
 
 ipcMain.on('save-settings', async (event, settings) => {
@@ -553,6 +680,7 @@ app.whenReady().then(() => {
   createWindow();
   createOSDWindow();
   createTray();
+  registerHotkeys();
 
   app.on('activate', () => {
     if (mainWindow) {
@@ -565,6 +693,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  unregisterHotkeys();
   stopBridge();
 });
 
