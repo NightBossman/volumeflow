@@ -5,6 +5,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Prevents arbitrary IPC from reaching main process even if
 // renderer is compromised (e.g. malicious dependency in bundle).
 // ============================================================
+// NOTE — Channel whitelists were missing several send/invoke channels that
+// main.js actually registered (show-osd, open-recordings, save-hotkeys).
+// Renderer calls to those channels were being silently dropped, breaking
+// the OSD button, "Open Recordings" and the hotkey editor.
+// Filled in by Claude (Anthropic) model `claude-opus-4-7`.
 const VALID_SEND_CHANNELS = new Set([
   'close-app',
   'minimize-to-tray',
@@ -18,6 +23,8 @@ const VALID_SEND_CHANNELS = new Set([
   'start-recording',
   'stop-recording',
   'toggle-mini-player',
+  'show-osd',
+  'open-recordings',
 ]);
 
 const VALID_INVOKE_CHANNELS = new Set([
@@ -28,9 +35,15 @@ const VALID_INVOKE_CHANNELS = new Set([
   'get-master-info',
   'get-hotkeys',
   'get-advanced-settings',
+  // save-hotkeys is now invoke-based (async) — was previously sendSync,
+  // which blocked the renderer thread and was not exposed by this preload.
+  'save-hotkeys',
 ]);
 
 const VALID_ON_CHANNELS = new Set([
+  // Main process emits 'audio-peaks'. The legacy 'bridge-peaks' name is
+  // kept for backwards compatibility with any downstream listener but is
+  // no longer produced — App.svelte now subscribes to 'audio-peaks'.
   'audio-peaks',
   'bridge-peaks',
   'hotkey-boost-changed',
