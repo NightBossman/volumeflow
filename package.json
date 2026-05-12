@@ -1,6 +1,6 @@
 {
   "name": "volumeflow",
-  "version": "1.7.0",
+  "version": "1.8.1",
   "description": "Premium Windows Audio Control & Monitoring",
   "main": "main.js",
   "scripts": {

@@ -16,14 +16,28 @@
   let masterPeak = 0;
   let sessionPeaks = {};
 
+  // Global Hotkeys
+  let hotkeys = {
+    toggleRecording: 'Ctrl+Alt+R',
+    toggleMasterMute: 'Ctrl+Alt+M',
+    toggleBoost: 'Ctrl+Alt+B',
+  };
+  let hotkeyEditing = null; // which key is being edited
+  let hotkeyError = '';
+  let hotkeySaved = false;
+
   $: filteredSessions = sessions.filter(s => 
     s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     s.pid.toString().includes(searchQuery)
   );
 
-  onMount(() => {
+  onMount(async () => {
     refreshSessions();
     refreshMaster();
+
+    // Load hotkeys from main process
+    const savedHotkeys = await ipcRenderer.invoke('get-hotkeys');
+    if (savedHotkeys) hotkeys = { ...hotkeys, ...savedHotkeys };
 
     const interval = setInterval(refreshSessions, 1000);
 
@@ -32,9 +46,24 @@
       sessionPeaks = data.sessions;
     });
 
+    // Sync boost/recording state triggered by global hotkeys
+    ipcRenderer.on('hotkey-boost-changed', (event, active) => {
+      boostActive = active;
+    });
+    ipcRenderer.on('hotkey-recording-changed', (event, { pid, active }) => {
+      if (active) {
+        activeRecordings.add(pid);
+      } else {
+        activeRecordings.delete(pid);
+      }
+      activeRecordings = activeRecordings;
+    });
+
     return () => {
       clearInterval(interval);
       ipcRenderer.removeAllListeners('bridge-peaks');
+      ipcRenderer.removeAllListeners('hotkey-boost-changed');
+      ipcRenderer.removeAllListeners('hotkey-recording-changed');
     };
   });
 
@@ -124,6 +153,55 @@
 
   function minimizeApp() {
     ipcRenderer.send('minimize-app');
+  }
+
+  // ---- Global Hotkeys ----
+
+  const hotkeyLabels = {
+    toggleRecording: 'Record Active Session',
+    toggleMasterMute: 'Toggle Master Mute',
+    toggleBoost: 'Toggle Smart Overdrive',
+  };
+
+  function startEditingHotkey(key) {
+    hotkeyEditing = key;
+    hotkeyError = '';
+    hotkeySaved = false;
+  }
+
+  function handleHotkeyKeydown(event, key) {
+    event.preventDefault();
+    const parts = [];
+    if (event.ctrlKey)  parts.push('Ctrl');
+    if (event.altKey)   parts.push('Alt');
+    if (event.shiftKey) parts.push('Shift');
+    const code = event.key;
+    // Ignore bare modifier presses
+    if (['Control','Alt','Shift','Meta'].includes(code)) return;
+    parts.push(code.length === 1 ? code.toUpperCase() : code);
+    if (parts.length < 2) {
+      hotkeyError = 'Use at least one modifier key (Ctrl, Alt, Shift).';
+      return;
+    }
+    hotkeys = { ...hotkeys, [key]: parts.join('+') };
+    hotkeyEditing = null;
+    hotkeyError = '';
+  }
+
+  function cancelEditHotkey() {
+    hotkeyEditing = null;
+    hotkeyError = '';
+  }
+
+  async function saveHotkeys() {
+    hotkeyError = '';
+    const result = ipcRenderer.sendSync('save-hotkeys', hotkeys);
+    if (result && result.ok) {
+      hotkeySaved = true;
+      setTimeout(() => hotkeySaved = false, 2000);
+    } else {
+      hotkeyError = (result && result.error) || 'Failed to save hotkeys.';
+    }
   }
 </script>
 
@@ -291,6 +369,48 @@
             <button class="action-btn primary" on:click={openRecordingsFolder}>
               Open Folder
             </button>
+          </div>
+
+          <!-- Global Hotkeys Section -->
+          <div class="hotkey-section">
+            <div class="hotkey-section-header">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 5H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 5H5v-2h2v2zm0-3H5v-2h2v2zm0-3H5V8h2v2zm3 6H8v-2h2v2zm3 0h-2v-2h2v2zm3 0h-2v-2h2v2zm3-1h-2v-2h2v2zm0-3h-2v-2h2v2zm0-3h-2V8h2v2z"/></svg>
+              <span>Global Hotkeys</span>
+            </div>
+
+            {#each Object.keys(hotkeys) as key}
+              <div class="hotkey-row">
+                <span class="hotkey-label">{hotkeyLabels[key]}</span>
+                {#if hotkeyEditing === key}
+                  <div
+                    class="hotkey-capture"
+                    tabindex="0"
+                    on:keydown={(e) => handleHotkeyKeydown(e, key)}
+                    on:blur={cancelEditHotkey}
+                  >
+                    Press keys…
+                  </div>
+                {:else}
+                  <button class="hotkey-badge" on:click={() => startEditingHotkey(key)}>
+                    {hotkeys[key]}
+                  </button>
+                {/if}
+              </div>
+            {/each}
+
+            {#if hotkeyError}
+              <p class="hotkey-error">{hotkeyError}</p>
+            {/if}
+
+            <div class="hotkey-actions">
+              <span class="hotkey-hint">Click a shortcut to rebind it, then press the new key combo.</span>
+              <button
+                class="action-btn primary {hotkeySaved ? 'saved' : ''}"
+                on:click={saveHotkeys}
+              >
+                {hotkeySaved ? '✓ Saved' : 'Apply Hotkeys'}
+              </button>
+            </div>
           </div>
         </div>
       {:else if activeTab === 'about'}
@@ -959,4 +1079,106 @@
   .back-btn:hover { background: rgba(255, 255, 255, 0.1); }
 
   .made-with { font-size: 0.75em; color: var(--text-dim); }
+
+  /* ---- Global Hotkeys ---- */
+  .hotkey-section {
+    margin-top: 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .hotkey-section-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.75em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--primary-color);
+    margin-bottom: 2px;
+  }
+
+  .hotkey-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .hotkey-label {
+    font-size: 0.82em;
+    color: var(--text-main);
+    flex: 1;
+  }
+
+  .hotkey-badge {
+    background: rgba(0, 242, 255, 0.08);
+    border: 1px solid rgba(0, 242, 255, 0.25);
+    color: var(--primary-color);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.78em;
+    font-weight: 700;
+    font-family: monospace;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, border-color 0.2s;
+    letter-spacing: 0.5px;
+  }
+
+  .hotkey-badge:hover {
+    background: rgba(0, 242, 255, 0.18);
+    border-color: var(--primary-color);
+  }
+
+  .hotkey-capture {
+    background: rgba(0, 242, 255, 0.05);
+    border: 1px dashed var(--primary-color);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 0.78em;
+    color: var(--text-dim);
+    font-style: italic;
+    cursor: wait;
+    outline: none;
+    animation: blink-border 1s infinite;
+  }
+
+  @keyframes blink-border {
+    0%, 100% { border-color: var(--primary-color); }
+    50%       { border-color: transparent; }
+  }
+
+  .hotkey-error {
+    font-size: 0.75em;
+    color: #ff4444;
+    margin: 0;
+  }
+
+  .hotkey-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .hotkey-hint {
+    font-size: 0.72em;
+    color: var(--text-dim);
+    line-height: 1.4;
+    flex: 1;
+  }
+
+  .action-btn.primary.saved {
+    background: rgba(0, 200, 100, 0.8);
+    color: #000;
+  }
 </style>
+
