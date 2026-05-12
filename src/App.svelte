@@ -31,13 +31,14 @@
     s.pid.toString().includes(searchQuery)
   );
 
-  onMount(async () => {
+  onMount(() => {
     refreshSessions();
     refreshMaster();
 
-    // Load hotkeys from main process
-    const savedHotkeys = await ipcRenderer.invoke('get-hotkeys');
-    if (savedHotkeys) hotkeys = { ...hotkeys, ...savedHotkeys };
+    // Load hotkeys from main process (fire-and-forget, no await)
+    ipcRenderer.invoke('get-hotkeys').then(savedHotkeys => {
+      if (savedHotkeys) hotkeys = { ...hotkeys, ...savedHotkeys };
+    });
 
     const interval = setInterval(refreshSessions, 1000);
 

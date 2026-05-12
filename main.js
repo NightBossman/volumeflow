@@ -31,6 +31,9 @@ let hotkeys = {
 // pid last used for recording via hotkey
 let hotkeyRecordingPid = null;
 
+// Shared boost state — synced between UI and hotkey
+let hotkeyBoostState = false;
+
 function registerHotkeys() {
   globalShortcut.unregisterAll();
 
@@ -45,13 +48,12 @@ function registerHotkeys() {
 
   // Toggle Smart Overdrive
   if (hotkeys.toggleBoost) {
-    let boostState = false;
     const ok = globalShortcut.register(hotkeys.toggleBoost, async () => {
-      boostState = !boostState;
-      await sendBridgeCommand({ action: 'set_boost', active: boostState, factor: 0.6 });
-      showOSD(boostState ? 'Smart Overdrive ON' : 'Smart Overdrive OFF', 'boost');
+      hotkeyBoostState = !hotkeyBoostState;
+      await sendBridgeCommand({ action: 'set_boost', active: hotkeyBoostState, factor: 0.6 });
+      showOSD(hotkeyBoostState ? 'Smart Overdrive ON' : 'Smart Overdrive OFF', 'boost');
       // Sync state to renderer
-      if (mainWindow) mainWindow.webContents.send('hotkey-boost-changed', boostState);
+      if (mainWindow) mainWindow.webContents.send('hotkey-boost-changed', hotkeyBoostState);
     });
     if (!ok) console.warn('[Hotkeys] Failed to register:', hotkeys.toggleBoost);
   }
@@ -69,7 +71,13 @@ function registerHotkeys() {
         ? result.sessions.find(s => s.pid === hotkeyRecordingPid)
         : result.sessions[0];
       if (!target) {
-        showOSD('Session not found', 'info');
+        // Session disappeared — reset tracking and fall back to first available
+        hotkeyRecordingPid = null;
+        const fallback = result.sessions[0];
+        hotkeyRecordingPid = fallback.pid;
+        await sendBridgeCommand({ action: 'start_recording', pid: fallback.pid });
+        showOSD(`Recording: ${fallback.name}`, 'record');
+        if (mainWindow) mainWindow.webContents.send('hotkey-recording-changed', { pid: fallback.pid, active: true });
         return;
       }
       if (hotkeyRecordingPid) {
@@ -456,6 +464,8 @@ ipcMain.on('set-ducking', (event, data) => {
 });
 
 ipcMain.on('set-boost', (event, data) => {
+  // Sync shared state so hotkey toggle stays in sync with UI
+  if (data.active !== undefined) hotkeyBoostState = data.active;
   sendBridgeCommand({ action: 'set_boost', ...data });
 });
 
