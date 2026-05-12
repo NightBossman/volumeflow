@@ -17,6 +17,7 @@ const VALID_SEND_CHANNELS = new Set([
   'set-boost',
   'start-recording',
   'stop-recording',
+  'toggle-mini-player',
 ]);
 
 const VALID_INVOKE_CHANNELS = new Set([
@@ -25,10 +26,16 @@ const VALID_INVOKE_CHANNELS = new Set([
   'apply-profile',
   'get-audio-sessions',
   'get-master-info',
+  'get-hotkeys',
+  'get-advanced-settings',
 ]);
 
 const VALID_ON_CHANNELS = new Set([
   'audio-peaks',
+  'bridge-peaks',
+  'hotkey-boost-changed',
+  'hotkey-recording-changed',
+  'save-settings-response',
 ]);
 
 // ============================================================
@@ -42,12 +49,15 @@ const listenerMap = new Map();
 // isDev flag — passed explicitly from main via additionalArguments.
 // process.env.NODE_ENV is unreliable in preload in packaged builds.
 // ============================================================
-const isDev = process.argv.some(a => a === '--vf-dev=true');
+const isDev = process.argv.some(a => a.startsWith('--vf-dev=true'));
+const isMini = process.argv.some(a => a.startsWith('--vf-mode=mini'));
 
 // ============================================================
 // Exposed API
 // ============================================================
 contextBridge.exposeInMainWorld('electron', {
+  isDev,
+  isMini,
   ipcRenderer: {
     send: (channel, data) => {
       if (!VALID_SEND_CHANNELS.has(channel)) return;

@@ -2,6 +2,21 @@
 
 Wszystkie istotne zmiany w tym projekcie będą dokumentowane w tym pliku.
 
+## [1.9.0] - 2026-05-12
+### Dodano
+- **Mini-Player Mode**: Kompaktowy, zawsze widoczny widget (240x350px) do szybkiego sterowania głośnością systemu i najaktywniejszych aplikacji.
+- **Advanced Audio Settings**: Nowa sekcja w ustawieniach pozwalająca na precyzyjną konfigurację:
+  - Próg czułości duckingu (Threshold).
+  - Siła wyciszenia tła (Ducking Factor).
+  - Czas trwania przejść głośności (Fade Duration).
+- **Przełącznik trybu Mini**: Nowy przycisk w nagłówku aplikacji do błyskawicznego przełączania między pełnym oknem a widgetem.
+
+### Ulepszono
+- **Bezpieczeństwo IPC**: Uszczelnienie komunikacji w `preload.cjs` i przejście na pełną izolację kontekstu (Context Isolation).
+- **Persystencja**: Wszystkie zaawansowane parametry audio są zapisywane w `config.json`.
+- **Integracja Audio**: Ustawienia duckingu i fade'owania są teraz dynamicznie wstrzykiwane do komend mostka audio.
+
+---
 ## [1.8.1] - 2026-05-12
 ### Dodano
 - **Global Hotkeys**: System skrótów klawiszowych działających w całym systemie (niezależnie od fokusa okna).

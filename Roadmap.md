@@ -1,6 +1,6 @@
 # Roadmap - VolumeFlow Evolution
 
-Status projektu: **v1.7.0 Stable** (OSD & Performance Edition)
+Status projektu: **v1.9.0 Stable** (Advanced Settings & Mini-Player)
 
 ## 🎯 Co już zrobiliśmy
 | Wersja | Kamień milowy | Status | Kluczowe cechy |
@@ -8,10 +8,12 @@ Status projektu: **v1.7.0 Stable** (OSD & Performance Edition)
 | v1.5.0 | Podstawa silnika | ✅ | WASAPI Integration, Peak Meters, Basic Mixer |
 | v1.6.0 | Power Features | ✅ | Smart Overdrive, Per-process Recording, Auto-Ducking |
 | v1.7.0 | UX & Stability | ✅ | OSD, Search, Health Monitoring, AudioBridge V1.8.0 |
+| v1.8.1 | Global Control | ✅ | Global Hotkeys, Keybind Editor, config persistence |
+| v1.9.0 | Pro Tools | ✅ | Mini-Player Mode, Advanced Audio Settings (Threshold/Factor/Fade) |
 
-## 🚀 W trakcie realizacji (v1.8.0)
-- [ ] **Global Hotkeys**: Implementacja skrótów klawiszowych (np. `Ctrl+Shift+R`) do sterowania nagrywaniem z dowolnego miejsca w systemie.
-- [ ] **Advanced Settings**: Możliwość konfiguracji progu duckingu i prędkości fade bezpośrednio z UI.
+## 🚀 W trakcie realizacji (v2.0.0)
+- [ ] **Audio Profiles**: Zapisywanie i wczytywanie zestawów głośności dla różnych scenariuszy (Gaming, Work, Movie).
+- [ ] **FFT Visualization**: Wizualizacja pasma dźwięku (Spectrum Analyzer) dla każdego procesu.
 
 ## 🔮 Plany na przyszłość
 - [ ] **v1.9.0**: Mini-Player Mode - kompaktowy widok z 3 najważniejszymi suwakami przypięty do rogu ekranu.
