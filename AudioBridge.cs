@@ -1768,7 +1768,15 @@ namespace VolumeFlow
         // boost toggle. The boost ramp is only triggered on user action
         // (not on the 10 Hz tick) so cache freshness is plenty.
         static void HandleSetBoost(bool active, float? factorOverride, string requestId) {
+            // Phase 1: update boost state and snapshot volumes/fades under stateLock.
+            // We snapshot here instead of reading stateLock inside publishedSessionsLock,
+            // which would create a nested publishedSessionsLock→stateLock inversion
+            // (HandleSetVolume + PeakPollingLoop use stateLock first, then
+            // publishedSessionsLock — same direction). Copying N small floats is
+            // cheap (sessions are typically <20 entries).
             float effectiveFactor;
+            Dictionary<int, float> baseSnap, fadeSnap;
+            int triggerPid;
             lock (stateLock) {
                 globalBoostActive = active;
                 if (factorOverride.HasValue) {
@@ -1776,19 +1784,23 @@ namespace VolumeFlow
                     boostReductionFactor = Math.Max(0f, Math.Min(1f, f));
                 }
                 effectiveFactor = boostReductionFactor;
+                baseSnap = new Dictionary<int, float>(baseVolumes);
+                fadeSnap = new Dictionary<int, float>(currentFades);
+                triggerPid = duckSettings.TriggerPid;
             }
             Log("Smart Overdrive " + (active ? "Enabled" : "Disabled") + " (factor=" + effectiveFactor.ToString("F2", CultureInfo.InvariantCulture) + ")");
 
+            // Phase 2: apply volumes to each published session.
+            // publishedSessionsLock is held during the COM call so the peak loop
+            // cannot release the RCW mid-call. stateLock is NOT taken here.
             lock (publishedSessionsLock) {
                 for (int i = 0; i < publishedSessions.Count; i++) {
                     var s = publishedSessions[i];
                     int pid = s.Pid;
-                    float vol, fade, boost;
-                    lock (stateLock) {
-                        if (!baseVolumes.TryGetValue(pid, out vol)) continue;
-                        if (!currentFades.TryGetValue(pid, out fade)) fade = 1.0f;
-                        boost = (active && pid != duckSettings.TriggerPid) ? boostReductionFactor : 1.0f;
-                    }
+                    float vol, fade;
+                    if (!baseSnap.TryGetValue(pid, out vol)) continue;
+                    if (!fadeSnap.TryGetValue(pid, out fade)) fade = 1.0f;
+                    float boost = (active && pid != triggerPid) ? effectiveFactor : 1.0f;
                     var sav = s.Control as ISimpleAudioVolume;
                     if (sav != null) {
                         try { sav.SetMasterVolume(Clamp01(vol * fade * boost), Guid.Empty); }
