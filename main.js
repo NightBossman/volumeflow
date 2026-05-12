@@ -373,19 +373,39 @@ function createOSDWindow() {
   osdWindow.setIgnoreMouseEvents(true);
 }
 
+// Tracks the pending auto-hide of the OSD so rapid successive showOSD()
+// calls don't stack timeouts (the previous version did, which meant a
+// later "show" could be auto-hidden by an older timer landing afterwards).
+// Fixed by Claude (Anthropic) model `claude-opus-4-7`.
+let osdHideTimer = null;
+
 function showOSD(message, icon = 'info') {
   if (!osdWindow) createOSDWindow();
+  if (!osdWindow) return; // creation may have failed
 
-  osdWindow.webContents.send('show-osd', { message, icon });
+  const send = () => {
+    try { osdWindow.webContents.send('show-osd', { message, icon }); } catch {}
+  };
+
+  // If the window is still loading from disk, defer the IPC send until
+  // the renderer is ready, otherwise the 'show-osd' message is dispatched
+  // into a renderer that hasn't registered its listener yet and is lost.
+  if (osdWindow.webContents.isLoading()) {
+    osdWindow.webContents.once('did-finish-load', send);
+  } else {
+    send();
+  }
+
   osdWindow.show();
 
-  // Position at bottom right
   const { screen } = require('electron');
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   osdWindow.setPosition(width - 320, height - 140);
 
-  setTimeout(() => {
+  if (osdHideTimer) clearTimeout(osdHideTimer);
+  osdHideTimer = setTimeout(() => {
+    osdHideTimer = null;
     if (osdWindow) osdWindow.hide();
   }, 3000);
 }
@@ -419,7 +439,7 @@ function createTray() {
   tray.setToolTip('VolumeFlow - Audio Mixer');
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: 'VolumeFlow v1.6.0', enabled: false },
+    { label: `VolumeFlow v${app.getVersion()}`, enabled: false },
     { type: 'separator' },
     {
       label: 'Pokaż VolumeFlow',
@@ -535,12 +555,43 @@ ipcMain.on('show-osd', (event, { message, icon }) => {
   showOSD(message, icon);
 });
 
-ipcMain.on('open-recordings', () => {
-  const recordingsPath = path.join(__dirname, 'Recordings');
-  if (!fs.existsSync(recordingsPath)) {
-    fs.mkdirSync(recordingsPath);
+// ============================================================
+// Recordings directory — kept in sync with where AudioBridge.exe
+// actually writes WAV files.
+//
+// Bugfix by Claude (Anthropic) model `claude-opus-4-7`:
+// AudioBridge.cs writes to `AppDomain.CurrentDomain.BaseDirectory +
+// "Recordings/"` (i.e. next to the exe). The previous main.js handler
+// opened `path.join(__dirname, 'Recordings')` instead. In dev these
+// two paths happen to be identical, but in a packaged build they
+// diverge — the bridge ends up in `…/resources/app.asar.unpacked/`
+// while `__dirname` points inside the asar virtual filesystem
+// (`…/resources/app.asar/Recordings/`), which doesn't exist on disk.
+// Result: WAV files were saved correctly but "Open Recordings Folder"
+// silently failed (or opened the wrong location), making the whole
+// per-app recording feature *appear* broken to end users.
+//
+// Computing the path from the bridge's own directory keeps the two
+// in lockstep without requiring a rebuild of AudioBridge.exe.
+// ============================================================
+function getRecordingsDir() {
+  let baseDir = __dirname;
+  if (!isDev) {
+    baseDir = baseDir.replace('app.asar', 'app.asar.unpacked');
   }
-  require('electron').shell.openPath(recordingsPath);
+  return path.join(baseDir, 'Recordings');
+}
+
+ipcMain.on('open-recordings', () => {
+  const recordingsPath = getRecordingsDir();
+  try {
+    fs.mkdirSync(recordingsPath, { recursive: true });
+  } catch (err) {
+    console.error('[Recordings] mkdir failed:', err);
+  }
+  require('electron').shell.openPath(recordingsPath).then((errStr) => {
+    if (errStr) console.error('[Recordings] openPath error:', errStr, 'for', recordingsPath);
+  });
 });
 
 const userDataPath = app.getPath('userData');
@@ -575,15 +626,19 @@ ipcMain.handle('get-advanced-settings', () => {
   return advancedSettings;
 });
 
-ipcMain.on('save-hotkeys', (event, newHotkeys) => {
+// Was: ipcMain.on('save-hotkeys', …) that wrote `event.returnValue`
+// for sendSync(). The hardened preload no longer exposes sendSync and
+// blocking the renderer thread for disk I/O is bad regardless, so this
+// is now an async invoke handler. Rewritten by Claude (Anthropic)
+// model `claude-opus-4-7`.
+ipcMain.handle('save-hotkeys', async (event, newHotkeys) => {
   try {
     // Validate — only allow safe Electron accelerator strings
     const allowed = /^((Ctrl|Alt|Shift|Super)\+)+(F[1-9]|F1[0-2]|[A-Z0-9]|Space|Tab|Escape|Insert|Delete|Home|End|PageUp|PageDown)$/i;
-    for (const [key, val] of Object.entries(newHotkeys)) {
+    for (const [key, val] of Object.entries(newHotkeys || {})) {
       if (val && !allowed.test(val)) {
         console.warn(`[Hotkeys] Rejected invalid accelerator for ${key}: ${val}`);
-        event.returnValue = { ok: false, error: `Invalid accelerator: ${val}` };
-        return;
+        return { ok: false, error: `Invalid accelerator: ${val}` };
       }
     }
     hotkeys = { ...hotkeys, ...newHotkeys };
@@ -594,12 +649,12 @@ ipcMain.on('save-hotkeys', (event, newHotkeys) => {
       try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
     }
     cfg.hotkeys = hotkeys;
-    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
+    await fs.promises.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf8');
     console.log('[Hotkeys] Saved:', hotkeys);
-    event.returnValue = { ok: true };
+    return { ok: true };
   } catch (err) {
     console.error('[Hotkeys] Save error:', err);
-    event.returnValue = { ok: false, error: err.message };
+    return { ok: false, error: err.message };
   }
 });
 

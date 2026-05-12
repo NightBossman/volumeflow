@@ -1,4 +1,29 @@
 <script>
+  // ============================================================
+  // Renderer logic — IPC layer rewritten by Claude (Anthropic),
+  // model `claude-opus-4-7` (Opus 4.7), branch
+  // `claude/audit-volumeflow-performance-p3a2V`.
+  //
+  // The previous version of this script was talking to the main
+  // process over channels that no longer exist after the v1.5.x
+  // IPC hardening:
+  //   * 'bridge-command' / 'bridge-response' were removed in favour
+  //     of typed invoke channels ('get-audio-sessions', 'get-master-info',
+  //     'set-session-volume', etc.).
+  //   * Peak frames are emitted on 'audio-peaks', not 'bridge-peaks'.
+  //   * The preload bridge does NOT expose `sendSync` or
+  //     `removeAllListeners`. Listener cleanup happens through the
+  //     unsubscribe closure returned by `ipcRenderer.on(...)`.
+  //   * The minimise-to-tray channel is 'minimize-to-tray', not
+  //     'minimize-app'.
+  //
+  // The whole UI was therefore inert: session list never populated,
+  // master mute couldn't sync, peaks didn't animate, the hotkey editor
+  // threw on save, the minimise button did nothing. None of this was
+  // adding features — it's just re-wiring renderer→main to the
+  // channels that already exist and were already whitelisted (with
+  // a small number of missing channels added in preload.cjs).
+  // ============================================================
   import { onMount } from 'svelte';
   const { ipcRenderer } = window.electron;
 
@@ -12,7 +37,7 @@
   let boostActive = false;
   let searchQuery = '';
 
-  // Peak levels (updated via bridge-peaks event)
+  // Peak levels (driven by 'audio-peaks' stream from main → bridge)
   let masterPeak = 0;
   let sessionPeaks = {};
 
@@ -35,21 +60,33 @@
   };
   let settingsLoading = true;
 
-  $: filteredSessions = sessions.filter(s => 
-    s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+  $: filteredSessions = sessions.filter(s =>
+    s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     s.pid.toString().includes(searchQuery)
   );
 
+  async function refreshSessions() {
+    const list = await ipcRenderer.invoke('get-audio-sessions');
+    if (Array.isArray(list)) sessions = list;
+  }
+
+  async function refreshMaster() {
+    const m = await ipcRenderer.invoke('get-master-info');
+    if (m) {
+      masterVolume = m.volume;
+      masterMuted = m.muted;
+    }
+  }
+
   onMount(() => {
+    // Initial state from main (sessions, master, hotkeys, advanced settings)
     refreshSessions();
     refreshMaster();
 
-    // Load hotkeys from main process (fire-and-forget, no await)
     ipcRenderer.invoke('get-hotkeys').then(savedHotkeys => {
       if (savedHotkeys) hotkeys = { ...hotkeys, ...savedHotkeys };
     });
 
-    // Load advanced settings
     ipcRenderer.invoke('load-settings').then(cfg => {
       if (cfg) {
         if (cfg.advancedSettings) advancedSettings = { ...advancedSettings, ...cfg.advancedSettings };
@@ -58,56 +95,49 @@
       settingsLoading = false;
     });
 
-    const interval = setInterval(refreshSessions, 1000);
+    // Poll both sessions and master at 1 Hz so external changes
+    // (e.g. user dragging the Windows mixer) propagate into the UI.
+    // Master polling was previously missing — only the initial value
+    // was ever read, so master mute/volume could drift indefinitely.
+    const interval = setInterval(() => {
+      refreshSessions();
+      refreshMaster();
+    }, 1000);
 
-    ipcRenderer.on('bridge-peaks', (event, data) => {
-      masterPeak = data.master;
-      sessionPeaks = data.sessions;
+    // The preload's `on()` returns an unsubscribe closure. We hold
+    // those references and call them in the cleanup function so the
+    // listeners are released cleanly on component teardown / HMR.
+    const offPeaks = ipcRenderer.on('audio-peaks', (data) => {
+      if (!data) return;
+      masterPeak = data.master ?? 0;
+      sessionPeaks = data.sessions ?? {};
     });
 
-    // Sync boost/recording state triggered by global hotkeys
-    ipcRenderer.on('hotkey-boost-changed', (event, active) => {
-      boostActive = active;
+    const offBoost = ipcRenderer.on('hotkey-boost-changed', (active) => {
+      boostActive = !!active;
     });
-    ipcRenderer.on('hotkey-recording-changed', (event, { pid, active }) => {
+
+    const offRec = ipcRenderer.on('hotkey-recording-changed', (payload) => {
+      if (!payload) return;
+      const { pid, active } = payload;
       if (active) {
         activeRecordings.add(pid);
       } else {
         activeRecordings.delete(pid);
       }
-      activeRecordings = activeRecordings;
+      activeRecordings = activeRecordings; // trigger Svelte reactivity
     });
 
     return () => {
       clearInterval(interval);
-      ipcRenderer.removeAllListeners('bridge-peaks');
-      ipcRenderer.removeAllListeners('hotkey-boost-changed');
-      ipcRenderer.removeAllListeners('hotkey-recording-changed');
+      offPeaks();
+      offBoost();
+      offRec();
     };
   });
 
-  async function refreshSessions() {
-    ipcRenderer.send('bridge-command', { action: 'get_sessions' });
-  }
-
-  async function refreshMaster() {
-    ipcRenderer.send('bridge-command', { action: 'get_master' });
-  }
-
-  ipcRenderer.on('bridge-response', (event, response) => {
-    if (response.status === 'ok') {
-      if (response.sessions) {
-        sessions = response.sessions;
-      }
-      if (response.master) {
-        masterVolume = response.master.volume;
-        masterMuted = response.master.muted;
-      }
-    }
-  });
-
   function setVolume(pid, volume) {
-    ipcRenderer.send('set-session-volume', { id: pid, volume });
+    ipcRenderer.send('set-session-volume', { id: pid, volume: Number(volume) });
   }
 
   function toggleMute(pid) {
@@ -115,7 +145,7 @@
   }
 
   function setMasterVolume(volume) {
-    ipcRenderer.send('set-master-volume', { id: 'master', volume });
+    ipcRenderer.send('set-master-volume', { id: 'master', volume: Number(volume) });
   }
 
   function toggleMasterMute() {
@@ -124,7 +154,7 @@
 
   function toggleDucking() {
     duckingEnabled = !duckingEnabled;
-    ipcRenderer.send('set-ducking', { 
+    ipcRenderer.send('set-ducking', {
       enabled: duckingEnabled,
       triggerPid: duckingTriggerPid,
       threshold: advancedSettings.duckingThreshold,
@@ -135,7 +165,7 @@
   function setDuckingTrigger(pid) {
     duckingTriggerPid = pid;
     if (duckingEnabled) {
-      ipcRenderer.send('set-ducking', { 
+      ipcRenderer.send('set-ducking', {
         enabled: true,
         triggerPid: pid
       });
@@ -170,7 +200,10 @@
   }
 
   function minimizeApp() {
-    ipcRenderer.send('minimize-app');
+    // Main process exposes 'minimize-to-tray' (the older 'minimize-app'
+    // channel was never registered in the v1.5+ main, so clicking the
+    // minimise button did nothing).
+    ipcRenderer.send('minimize-to-tray');
   }
 
   // ---- Global Hotkeys ----
@@ -212,13 +245,20 @@
   }
 
   async function saveHotkeys() {
+    // Was previously `ipcRenderer.sendSync('save-hotkeys', …)`. sendSync
+    // is not exposed by the hardened preload (and would block the
+    // renderer thread anyway). Use invoke + async/await.
     hotkeyError = '';
-    const result = ipcRenderer.sendSync('save-hotkeys', hotkeys);
-    if (result && result.ok) {
-      hotkeySaved = true;
-      setTimeout(() => hotkeySaved = false, 2000);
-    } else {
-      hotkeyError = (result && result.error) || 'Failed to save hotkeys.';
+    try {
+      const result = await ipcRenderer.invoke('save-hotkeys', hotkeys);
+      if (result && result.ok) {
+        hotkeySaved = true;
+        setTimeout(() => hotkeySaved = false, 2000);
+      } else {
+        hotkeyError = (result && result.error) || 'Failed to save hotkeys.';
+      }
+    } catch (err) {
+      hotkeyError = err && err.message ? err.message : 'Failed to save hotkeys.';
     }
   }
 
@@ -231,7 +271,6 @@
         fadeDuration: advancedSettings.fadeDuration
       }
     });
-    // We could add a "Saved" indicator here too
   }
 
   function toggleMiniPlayer() {
